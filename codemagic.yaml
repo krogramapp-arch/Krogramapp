@@ -1,31 +1,39 @@
-workflows:
-  krochat-build-test:
-    name: KroChat - Build & Test
+
+  krochat-unsigned-ipa:
+    name: KroChat - Unsigned IPA
     instance_type: mac_mini_m2
     max_build_duration: 30
     environment:
-      xcode: latest
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: main
-          include: true
+      vars:
+        XCODE_PROJECT: "KroChat.xcodeproj"
+        XCODE_SCHEME: "KroChat"
     scripts:
-      - name: Install XcodeGen
-        script: brew install xcodegen
-      - name: Generate Xcode project
-        script: xcodegen generate
-      - name: Build and run unit tests on Simulator
+      - name: Install XcodeGen and generate project
         script: |
-          set -eo pipefail
-          UDID=$(xcrun simctl list devices available | grep -m1 'iPhone' | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
-          echo "Using simulator: $UDID"
-          xcodebuild test \
-            -project KroChat.xcodeproj \
-            -scheme KroChat \
-            -destination "id=$UDID" \
-            -resultBundlePath build/TestResults \
-            CODE_SIGNING_ALLOWED=NO
+          brew install xcodegen
+          xcodegen generate
+      - name: Build unsigned iOS app
+        script: |
+          xcodebuild \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Package unsigned IPA
+        script: |
+          APP_PATH="$(find build/DerivedData/Build/Products \
+            -type d -name '*.app' -path '*iphoneos*' | head -n 1)"
+          test -n "$APP_PATH" || {
+            echo "App bundle not found"
+            exit 1
+          }
+          mkdir -p ipa/Payload
+          cp -R "$APP_PATH" ipa/Payload/
+          cd ipa
+          zip -qr "$CM_BUILD_DIR/KroChat-unsigned.ipa" Payload
     artifacts:
-      - build/TestResults.xcresult
+      - KroChat-unsigned.ipa
