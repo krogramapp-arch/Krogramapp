@@ -36,21 +36,25 @@ workflows:
           xcodegen generate
       - name: Build and test on iOS Simulator
         script: |
-          set -eo pipefail
+          set -euo pipefail
           SIMULATOR_UDID="$(xcrun simctl list devices available | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
           if [ -z "$SIMULATOR_UDID" ]; then
             echo "No available iPhone simulator was found"
             exit 1
           fi
           cd "$PROJECT_DIR"
+          mkdir -p "$PROJECT_DIR/build"
           xcodebuild test \
             -project KroGram.xcodeproj \
             -scheme KroGram \
             -destination "id=$SIMULATOR_UDID" \
+            -parallel-testing-enabled NO \
             -resultBundlePath "$PROJECT_DIR/build/TestResults.xcresult" \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$CM_BUILD_DIR/xcodebuild-test.log"
     artifacts:
       - archive/**/build/TestResults.xcresult
+      - xcodebuild-test.log
 
   krogram-unsigned-ipa:
     name: KroGram - Unsigned IPA
@@ -83,6 +87,7 @@ workflows:
           xcodegen generate
       - name: Build unsigned iOS app
         script: |
+          set -euo pipefail
           cd "$PROJECT_DIR"
           xcodebuild \
             -project KroGram.xcodeproj \
@@ -92,7 +97,8 @@ workflows:
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$PROJECT_DIR/build/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build \
+            2>&1 | tee "$CM_BUILD_DIR/xcodebuild-unsigned.log"
       - name: Package unsigned IPA
         script: |
           APP_PATH="$(find "$PROJECT_DIR/build/DerivedData/Build/Products" \
@@ -108,6 +114,7 @@ workflows:
           zip -qr "$CM_BUILD_DIR/KroGram-unsigned.ipa" Payload
     artifacts:
       - KroGram-unsigned.ipa
+      - xcodebuild-unsigned.log
 
   krogram-ipa:
     name: KroGram - Ad Hoc IPA
@@ -147,8 +154,10 @@ workflows:
           xcode-project use-profiles
       - name: Build signed IPA
         script: |
+          set -euo pipefail
           cd "$PROJECT_DIR"
-          xcode-project build-ipa --project KroGram.xcodeproj --scheme KroGram
+          xcode-project build-ipa --project KroGram.xcodeproj --scheme KroGram \
+            2>&1 | tee "$CM_BUILD_DIR/xcodebuild-signed.log"
           IPA_PATH="$(find "$PROJECT_DIR/build/ios/ipa" -maxdepth 1 -type f -name '*.ipa' -print -quit)"
           if [ -z "$IPA_PATH" ]; then
             echo "Signed KroGram IPA was not found"
@@ -157,3 +166,4 @@ workflows:
           cp "$IPA_PATH" "$CM_BUILD_DIR/KroGram.ipa"
     artifacts:
       - KroGram.ipa
+      - xcodebuild-signed.log
