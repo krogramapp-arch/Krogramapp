@@ -1,0 +1,31 @@
+workflows:
+  krochat-build-test:
+    name: KroChat - Build & Test
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: Install XcodeGen
+        script: brew install xcodegen
+      - name: Generate Xcode project
+        script: xcodegen generate
+      - name: Build and run unit tests on Simulator
+        script: |
+          set -eo pipefail
+          UDID=$(xcrun simctl list devices available | grep -m1 'iPhone' | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
+          echo "Using simulator: $UDID"
+          xcodebuild test \
+            -project KroChat.xcodeproj \
+            -scheme KroChat \
+            -destination "id=$UDID" \
+            -resultBundlePath build/TestResults \
+            CODE_SIGNING_ALLOWED=NO
+    artifacts:
+      - build/TestResults.xcresult
