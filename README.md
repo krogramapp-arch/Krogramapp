@@ -6,7 +6,7 @@
 
 ضع `KroGram.zip` و`codemagic.yaml` في جذر مستودع GitHub. يجب أن يحتوي ZIP على مجلد مشروع يتضمن `project.yml`، ومجلديّ `KroGram/` و`KroGramTests/`. لا ترفع مفاتيح أو ملفات توقيع سرية داخل الأرشيف.
 
-ملف `KroGram.zip` مبني من الأرشيف `KroChat 4.zip`. إعداد Codemagic يبحث عن `KroGram.zip` تحديدًا؛ أعد تسمية الأرشيف بهذا الاسم عند رفعه.
+يتضمن `KroGram.zip` مشروع KroGram ومصادر التطبيق والاختبارات اللازمة للبناء. يقرأ إعداد Codemagic هذا الأرشيف مباشرةً من جذر المستودع.
 
 ## البناء على Codemagic
 
