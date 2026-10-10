@@ -28,4 +28,4 @@ Workflow الاختبارات يعمل تلقائيًا عند الدفع إلى
 
 ## تغيير معرّف التطبيق
 
-عدّل `PRODUCT_BUNDLE_IDENTIFIER` في `project.yml` و`bundle_identifier` في Workflow التوقيع معًا قبل إعداد التوقيع. يجب أن يطابق المعرّف ملف provisioning في Apple Developer.
+عدّل `PRODUCT_BUNDLE_IDENTIFIER` في `KroGram/project.yml` داخل `KroGram.zip` و`bundle_identifier` في Workflow التوقيع معًا قبل إعداد التوقيع. يجب أن يطابق المعرّف ملف provisioning في Apple Developer.
