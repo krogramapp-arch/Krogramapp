@@ -1,60 +1,159 @@
 workflows:
-  krochat-unsigned-ipa:
-    name: KroChat - Unsigned IPA
+  krogram-build-test:
+    name: KroGram - Build & Test
     instance_type: mac_mini_m2
-    max_build_duration: 30
+    max_build_duration: 60
     environment:
-      vars:
-        XCODE_PROJECT: "KroChat.xcodeproj"
-        XCODE_SCHEME: "KroChat"
+      xcode: latest
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
     scripts:
-      - name: Install XcodeGen and generate project
+      - name: Extract KroGram source archive
         script: |
-          brew install xcodegen
+          ZIP_PATH="$CM_BUILD_DIR/KroGram.zip"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "KroGram.zip is missing from the repository root"
+            exit 1
+          fi
+          EXTRACT_DIR="$CM_BUILD_DIR/archive"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$ZIP_PATH" -d "$EXTRACT_DIR"
+          PROJECT_YML="$(find "$EXTRACT_DIR" -type f -name project.yml -print -quit)"
+          if [ -z "$PROJECT_YML" ]; then
+            echo "No project.yml found in KroGram.zip"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$PROJECT_YML")" >> "$CM_ENV"
+      - name: Install XcodeGen
+        script: brew install xcodegen
+      - name: Generate Xcode project
+        script: |
+          cd "$PROJECT_DIR"
+          xcodegen generate
+      - name: Build and test on iOS Simulator
+        script: |
+          set -eo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
+          if [ -z "$SIMULATOR_UDID" ]; then
+            echo "No available iPhone simulator was found"
+            exit 1
+          fi
+          cd "$PROJECT_DIR"
+          xcodebuild test \
+            -project KroGram.xcodeproj \
+            -scheme KroGram \
+            -destination "id=$SIMULATOR_UDID" \
+            -resultBundlePath "$PROJECT_DIR/build/TestResults.xcresult" \
+            CODE_SIGNING_ALLOWED=NO
+    artifacts:
+      - archive/**/build/TestResults.xcresult
+
+  krogram-unsigned-ipa:
+    name: KroGram - Unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+    scripts:
+      - name: Extract KroGram source archive
+        script: |
+          ZIP_PATH="$CM_BUILD_DIR/KroGram.zip"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "KroGram.zip is missing from the repository root"
+            exit 1
+          fi
+          EXTRACT_DIR="$CM_BUILD_DIR/archive"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$ZIP_PATH" -d "$EXTRACT_DIR"
+          PROJECT_YML="$(find "$EXTRACT_DIR" -type f -name project.yml -print -quit)"
+          if [ -z "$PROJECT_YML" ]; then
+            echo "No project.yml found in KroGram.zip"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$PROJECT_YML")" >> "$CM_ENV"
+      - name: Install XcodeGen
+        script: brew install xcodegen
+      - name: Generate Xcode project
+        script: |
+          cd "$PROJECT_DIR"
           xcodegen generate
       - name: Build unsigned iOS app
         script: |
+          cd "$PROJECT_DIR"
           xcodebuild \
-            -project "$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME" \
+            -project KroGram.xcodeproj \
+            -scheme KroGram \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath build/DerivedData \
+            -derivedDataPath "$PROJECT_DIR/build/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             build
       - name: Package unsigned IPA
         script: |
-          APP_PATH="$(find build/DerivedData/Build/Products \
-            -type d -name '*.app' -path '*iphoneos*' | head -n 1)"
-          test -n "$APP_PATH" || {
-            echo "App bundle not found"
+          APP_PATH="$(find "$PROJECT_DIR/build/DerivedData/Build/Products" \
+            -type d -name '*.app' -path '*iphoneos*' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "KroGram.app was not found after the build"
             exit 1
-          }
-          mkdir -p ipa/Payload
-          cp -R "$APP_PATH" ipa/Payload/
-          cd ipa
-          zip -qr "$CM_BUILD_DIR/KroChat-unsigned.ipa" Payload
+          fi
+          PACKAGE_DIR="$CM_BUILD_DIR/ipa"
+          mkdir -p "$PACKAGE_DIR/Payload"
+          cp -R "$APP_PATH" "$PACKAGE_DIR/Payload/"
+          cd "$PACKAGE_DIR"
+          zip -qr "$CM_BUILD_DIR/KroGram-unsigned.ipa" Payload
     artifacts:
-      - KroChat-unsigned.ipa
+      - KroGram-unsigned.ipa
 
-  krochat-ipa:
-    name: KroChat - Ad Hoc IPA
+  krogram-ipa:
+    name: KroGram - Ad Hoc IPA
     instance_type: mac_mini_m2
-    max_build_duration: 30
+    max_build_duration: 60
     environment:
       xcode: latest
       ios_signing:
         distribution_type: ad_hoc
-        bundle_identifier: com.krochat.app
+        bundle_identifier: com.krogram.app
     scripts:
+      - name: Extract KroGram source archive
+        script: |
+          ZIP_PATH="$CM_BUILD_DIR/KroGram.zip"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "KroGram.zip is missing from the repository root"
+            exit 1
+          fi
+          EXTRACT_DIR="$CM_BUILD_DIR/archive"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$ZIP_PATH" -d "$EXTRACT_DIR"
+          PROJECT_YML="$(find "$EXTRACT_DIR" -type f -name project.yml -print -quit)"
+          if [ -z "$PROJECT_YML" ]; then
+            echo "No project.yml found in KroGram.zip"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$PROJECT_YML")" >> "$CM_ENV"
       - name: Install XcodeGen
         script: brew install xcodegen
       - name: Generate Xcode project
-        script: xcodegen generate
+        script: |
+          cd "$PROJECT_DIR"
+          xcodegen generate
       - name: Set up code signing
-        script: xcode-project use-profiles
-      - name: Build IPA
-        script: xcode-project build-ipa --project KroChat.xcodeproj --scheme KroChat
+        script: |
+          cd "$PROJECT_DIR"
+          xcode-project use-profiles
+      - name: Build signed IPA
+        script: |
+          cd "$PROJECT_DIR"
+          xcode-project build-ipa --project KroGram.xcodeproj --scheme KroGram
+          IPA_PATH="$(find "$PROJECT_DIR/build/ios/ipa" -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+          if [ -z "$IPA_PATH" ]; then
+            echo "Signed KroGram IPA was not found"
+            exit 1
+          fi
+          cp "$IPA_PATH" "$CM_BUILD_DIR/KroGram.ipa"
     artifacts:
-      - build/ios/ipa/*.ipa
+      - KroGram.ipa

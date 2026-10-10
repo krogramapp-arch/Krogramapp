@@ -1,54 +1,31 @@
-# KroChat
+# KroGram
 
-عميل مراسلة iOS مستقل وغير رسمي مبني بـ Swift وSwiftUI.
-**المرحلة 1: واجهات ببيانات تجريبية. لا اتصال بتيليجرام بعد.**
+تطبيق iOS مستقل وغير رسمي للمراسلة عبر تيليجرام، مبني بـ Swift وSwiftUI وTDLib.
 
-التفاصيل المعمارية وجدول ما يعمل وما لا يعمل: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+## تجهيز المستودع
 
-> لم يُبنَ هذا المشروع ولم تُشغَّل اختباراته بعد. أول بناء على Codemagic هو الاختبار الحقيقي الأول، وقد تظهر أخطاء ترجمة تُصلَح بعد قراءة سجل البناء.
+ضع `KroGram.zip` و`codemagic.yaml` في جذر مستودع GitHub. يجب أن يحتوي ZIP على مجلد مشروع يتضمن `project.yml`، ومجلديّ `KroGram/` و`KroGramTests/`. لا ترفع مفاتيح أو ملفات توقيع سرية داخل الأرشيف.
 
-## الخطوة 1: رفع الملفات إلى GitHub من الآيفون
+ملف `KroGram.zip` مبني من الأرشيف `KroChat 4.zip`. إعداد Codemagic يبحث عن `KroGram.zip` تحديدًا؛ أعد تسمية الأرشيف بهذا الاسم عند رفعه.
 
-**الطريقة أ: تطبيق Working Copy (الأسهل للمجلدات)**
-1. افتح ملف ZIP في تطبيق "الملفات" واضغط عليه لفك الضغط.
-2. من Working Copy أنشئ مستودعًا جديدًا (Create repository) ثم اربطه بمستودع فارغ أنشأته في github.com.
-3. انسخ محتويات مجلد `KroChat` المفكوك إلى المستودع (من زر الإضافة > Link/Import files)، ثم Commit ثم Push.
-4. تحقق من سياسة التطبيق وحدوده المجانية بنفسك قبل الاعتماد عليه، فلم أتحقق منها.
+## البناء على Codemagic
 
-**الطريقة ب: Safari فقط (بلا تطبيقات)**
-1. في github.com أنشئ مستودعًا جديدًا (اجعله **Private**).
-2. اضغط Add file ← Create new file.
-3. في خانة الاسم اكتب المسار كاملًا مثل `KroChat/App/KroChatApp.swift` (كتابة `/` تنشئ المجلد تلقائيًا).
-4. الصق محتوى الملف ثم Commit changes. كرّر لكل ملف (نحو 30 ملفًا).
-5. ملف الأيقونة `icon-1024.png` ثنائي، فارفعه عبر Add file ← Upload files إلى المسار `KroChat/Resources/Assets.xcassets/AppIcon.appiconset/`.
+1. أضف مستودع GitHub إلى Codemagic واختر إعداد `Other / codemagic.yaml`.
+2. استخدم Workflow `KroGram - Build & Test` للتحقق من البناء والاختبارات على محاكي iOS.
+3. استخدم `KroGram - Unsigned IPA` لإنتاج IPA غير موقّع للتنزيل والاختبار بأدوات توقيع خارجية.
+4. لتثبيت التطبيق على أجهزة مسجلة، استخدم `KroGram - Ad Hoc IPA`. يتطلب ذلك عضوية Apple Developer، وشهادة وملف provisioning من نوع Ad Hoc يتضمن المعرّف `com.krogram.app` والأجهزة المسجلة، وإعداد التوقيع في Codemagic.
 
-## الخطوة 2: البناء على Codemagic
+Workflow الاختبارات يعمل تلقائيًا عند الدفع إلى فرع `main`. قد يستغرق أول بناء وقتًا أطول بسبب تنزيل XcodeGen وحزمة `TDLibFramework`.
 
-1. ادخل codemagic.io بحساب GitHub، ثم Add application واختر المستودع.
-2. اختر نوع المشروع "Other / codemagic.yaml" فيقرأ `codemagic.yaml` تلقائيًا.
-3. شغّل Workflow يدويًا (Start new build). يوجد Workflow لبناء IPA غير موقّع، وWorkflow آخر لإنتاج IPA موقّع يمكن تثبيته على أجهزة مسجّلة.
+## التطبيق
 
-## الحصول على IPA للتثبيت على الآيفون
+- تسجيل الدخول إلى تيليجرام عبر TDLib؛ تُحفظ مفاتيح API محليًا في Keychain.
+- وضع تجريبي متاح دون تسجيل دخول.
+- مجموعة أوامر KroGram Commander آمنة ومعاد تنفيذها أصليًا في Swift، قابلة للتفعيل والتعطيل من الإعدادات؛ تشمل الحاسبة وأدوات النص ومعلومات المحادثة وإجراءاتها وبعض الألعاب المحلية، وليست تشغيلًا لكل ميزات userbot الأصلية. تنزيل الفيديوهات غير مدعوم حاليًا.
+- اللغتان العربية والإنجليزية.
 
-Workflow باسم `KroChat - Unsigned IPA` ينتج ملف IPA غير موقّع، ولا يمكن تثبيته مباشرة على الآيفون. للتثبيت على `ksgin` و`esgin` استخدم `KroChat - Ad Hoc IPA`، الذي يبني ملفًا موقّعًا. يتطلب ذلك:
+التفاصيل المعمارية وحالة الميزات في [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-1. عضوية Apple Developer مدفوعة، وربط App Store Connect بحساب Codemagic عبر API key.
-2. تسجيل UDID لكل من `ksgin` و`esgin` في حساب Apple Developer، ثم إنشاء/تحديث Ad Hoc provisioning profile للتطبيق `com.krochat.app` يتضمن الجهازين وإضافته إلى إعدادات التوقيع في Codemagic.
-3. بعد حفظ `codemagic.yaml` على الفرع الذي يتتبعه التطبيق، افتح التطبيق في Codemagic واختر `KroChat - Ad Hoc IPA` من `Start new build`. نزّل ملف `.ipa` من Artifacts عند نجاح البناء.
+## تغيير معرّف التطبيق
 
-إذا لم يظهر Workflow، تحقق من أن التطبيق في Codemagic مربوط بالمستودع والفرع الصحيحين وأن إعداد مصدر الإعداد هو `codemagic.yaml` في جذر المستودع، ثم أعد تحميل صفحة التطبيق.
-
-ملاحظات:
-- الخطة المجانية في Codemagic لها حد دقائق شهري؛ راجعه في موقعهم.
-- TestFlight ليس مضبوطًا بعد (المرحلة 4)، ويحتاج حساب Apple Developer مدفوعًا.
-
-## تغيير اسم الحزمة
-
-`PRODUCT_BUNDLE_IDENTIFIER` في `project.yml` هو `com.krochat.app`. غيّره إلى معرّف يخصك قبل أي توقيع.
-
-## المراحل
-
-1. **(هذه)** الهيكل، نظام التصميم، الشاشات ببيانات تجريبية.
-2. Telegram API وتسجيل الدخول الآمن وربط المحادثات الحقيقية.
-3. حسابات متعددة، بحث متقدم، خصوصية محلية، وسائط.
-4. اختبارات واجهة، مراجعة أمان وتراخيص، توقيع، TestFlight.
+عدّل `PRODUCT_BUNDLE_IDENTIFIER` في `project.yml` و`bundle_identifier` في Workflow التوقيع معًا قبل إعداد التوقيع. يجب أن يطابق المعرّف ملف provisioning في Apple Developer.
