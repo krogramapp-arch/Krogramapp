@@ -26,13 +26,21 @@
 
 1. ادخل codemagic.io بحساب GitHub، ثم Add application واختر المستودع.
 2. اختر نوع المشروع "Other / codemagic.yaml" فيقرأ `codemagic.yaml` تلقائيًا.
-3. شغّل Workflow باسم `KroChat - Build & Test` يدويًا (Start new build).
-4. يثبّت XcodeGen، ويولّد `KroChat.xcodeproj`، ثم يبني ويشغّل الاختبارات على المحاكي دون توقيع.
-5. إن فشل البناء، انسخ آخر 40 سطرًا من السجل وأرسلها لي لأصلح الملف المعني.
+3. شغّل Workflow يدويًا (Start new build). يوجد Workflow لبناء IPA غير موقّع، وWorkflow آخر لإنتاج IPA موقّع يمكن تثبيته على أجهزة مسجّلة.
+
+## الحصول على IPA للتثبيت على الآيفون
+
+Workflow باسم `KroChat - Unsigned IPA` ينتج ملف IPA غير موقّع، ولا يمكن تثبيته مباشرة على الآيفون. للتثبيت على `ksgin` و`esgin` استخدم `KroChat - Ad Hoc IPA`، الذي يبني ملفًا موقّعًا. يتطلب ذلك:
+
+1. عضوية Apple Developer مدفوعة، وربط App Store Connect بحساب Codemagic عبر API key.
+2. تسجيل UDID لكل من `ksgin` و`esgin` في حساب Apple Developer، ثم إنشاء/تحديث Ad Hoc provisioning profile للتطبيق `com.krochat.app` يتضمن الجهازين وإضافته إلى إعدادات التوقيع في Codemagic.
+3. بعد حفظ `codemagic.yaml` على الفرع الذي يتتبعه التطبيق، افتح التطبيق في Codemagic واختر `KroChat - Ad Hoc IPA` من `Start new build`. نزّل ملف `.ipa` من Artifacts عند نجاح البناء.
+
+إذا لم يظهر Workflow، تحقق من أن التطبيق في Codemagic مربوط بالمستودع والفرع الصحيحين وأن إعداد مصدر الإعداد هو `codemagic.yaml` في جذر المستودع، ثم أعد تحميل صفحة التطبيق.
 
 ملاحظات:
 - الخطة المجانية في Codemagic لها حد دقائق شهري؛ راجعه في موقعهم.
-- التوقيع وTestFlight ليسا مضبوطين بعد (المرحلة 4)، ويحتاجان حساب Apple Developer مدفوعًا.
+- TestFlight ليس مضبوطًا بعد (المرحلة 4)، ويحتاج حساب Apple Developer مدفوعًا.
 
 ## تغيير اسم الحزمة
 

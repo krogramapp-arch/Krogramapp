@@ -1,4 +1,4 @@
-
+workflows:
   krochat-unsigned-ipa:
     name: KroChat - Unsigned IPA
     instance_type: mac_mini_m2
@@ -37,3 +37,24 @@
           zip -qr "$CM_BUILD_DIR/KroChat-unsigned.ipa" Payload
     artifacts:
       - KroChat-unsigned.ipa
+
+  krochat-ipa:
+    name: KroChat - Ad Hoc IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+      ios_signing:
+        distribution_type: ad_hoc
+        bundle_identifier: com.krochat.app
+    scripts:
+      - name: Install XcodeGen
+        script: brew install xcodegen
+      - name: Generate Xcode project
+        script: xcodegen generate
+      - name: Set up code signing
+        script: xcode-project use-profiles
+      - name: Build IPA
+        script: xcode-project build-ipa --project KroChat.xcodeproj --scheme KroChat
+    artifacts:
+      - build/ios/ipa/*.ipa
