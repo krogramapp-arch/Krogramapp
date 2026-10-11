@@ -130,53 +130,7 @@ struct ChatListView: View {
                         .listRowBackground(Color.clear)
                 }
                 ForEach(vm.visibleChats) { chat in
-                    NavigationLink(value: chat.id) {
-                        ChatRow(chat: chat, draft: vm.draft(for: chat.id))
-                    }
-                    .listRowBackground(.ultraThinMaterial)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        if vm.canDeleteChats {
-                            Button(role: .destructive) {
-                                askDelete([chat.id])
-                            } label: { Label("action.delete", systemImage: "trash") }
-                        }
-                        Button {
-                            vm.update([chat.id]) { $0.isArchived = true }
-                        } label: { Label("action.archive", systemImage: "archivebox") }
-                        .tint(.orange)
-                    }
-                    .swipeActions(edge: .leading) {
-                        Button {
-                            vm.update([chat.id]) { $0.isPinned.toggle() }
-                        } label: {
-                            Label(chat.isPinned ? "action.unpin" : "action.pin",
-                                  systemImage: chat.isPinned ? "pin.slash" : "pin")
-                        }
-                        .tint(themes.current.accent)
-                        Button {
-                            vm.update([chat.id]) { $0.isHidden = true }
-                        } label: { Label("action.hide", systemImage: "eye.slash") }
-                        .tint(.gray)
-                    }
-                    .contextMenu {
-                        Button {
-                            vm.update([chat.id]) { $0.isPinned.toggle() }
-                        } label: {
-                            Label(chat.isPinned ? "action.unpin" : "action.pin",
-                                  systemImage: chat.isPinned ? "pin.slash" : "pin")
-                        }
-                        folderMenu(for: chat)
-                        Button {
-                            vm.update([chat.id]) { $0.isArchived = true }
-                        } label: { Label("action.archive", systemImage: "archivebox") }
-                        if vm.canDeleteChats {
-                            Button(role: .destructive) {
-                                askDelete([chat.id])
-                            } label: { Label("action.delete", systemImage: "trash") }
-                        }
-                    } preview: {
-                        ChatPreview(chat: chat, theme: themes.current)
-                    }
+                    chatLink(for: chat)
                 }
             }
             .listStyle(.plain)
@@ -228,6 +182,72 @@ struct ChatListView: View {
     }
 
     // MARK: Pieces
+
+    private func chatLink(for chat: Chat) -> some View {
+        NavigationLink(value: chat.id) {
+            ChatRow(chat: chat, draft: vm.draft(for: chat.id))
+        }
+        .listRowBackground(.ultraThinMaterial)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if vm.canDeleteChats {
+                Button(role: .destructive) {
+                    askDelete([chat.id])
+                } label: { Label("action.delete", systemImage: "trash") }
+            }
+            Button {
+                vm.update([chat.id]) { $0.isArchived = true }
+            } label: { Label("action.archive", systemImage: "archivebox") }
+            .tint(.orange)
+        }
+        .swipeActions(edge: .leading) {
+            leadingSwipeActions(for: chat)
+        }
+        .contextMenu {
+            contextMenuActions(for: chat)
+        } preview: {
+            ChatPreview(chat: chat, theme: themes.current)
+        }
+    }
+
+    @ViewBuilder
+    private func leadingSwipeActions(for chat: Chat) -> some View {
+        Button {
+            vm.update([chat.id]) { $0.isPinned.toggle() }
+        } label: {
+            Label(chat.isPinned ? "action.unpin" : "action.pin",
+                  systemImage: chat.isPinned ? "pin.slash" : "pin")
+        }
+        .tint(themes.current.accent)
+        Button {
+            vm.update([chat.id]) { $0.isHidden = true }
+        } label: {
+            Label("action.hide", systemImage: "eye.slash")
+        }
+        .tint(.gray)
+    }
+
+    @ViewBuilder
+    private func contextMenuActions(for chat: Chat) -> some View {
+        Button {
+            vm.update([chat.id]) { $0.isPinned.toggle() }
+        } label: {
+            Label(chat.isPinned ? "action.unpin" : "action.pin",
+                  systemImage: chat.isPinned ? "pin.slash" : "pin")
+        }
+        folderMenu(for: chat)
+        Button {
+            vm.update([chat.id]) { $0.isArchived = true }
+        } label: {
+            Label("action.archive", systemImage: "archivebox")
+        }
+        if vm.canDeleteChats {
+            Button(role: .destructive) {
+                askDelete([chat.id])
+            } label: {
+                Label("action.delete", systemImage: "trash")
+            }
+        }
+    }
 
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {

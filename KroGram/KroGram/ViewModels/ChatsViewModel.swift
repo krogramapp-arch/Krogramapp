@@ -36,8 +36,9 @@ final class ChatsViewModel: ObservableObject {
     private static let hiddenKey = "krochat.hidden.v1"
     private static let maxDrafts = 100
 
-    init(repository: ChatRepository, privacy: PrivacyMode = .shared, defaults: UserDefaults = .standard) {
+    init(repository: ChatRepository, privacy: PrivacyMode? = nil, defaults: UserDefaults = .standard) {
         self.repository = repository
+        let privacy = privacy ?? .shared
         self.privacy = privacy
         self.defaults = defaults
         let storedDrafts = (defaults.dictionary(forKey: Self.draftsKey) as? [String: String]) ?? [:]

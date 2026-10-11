@@ -32,13 +32,7 @@ struct ContactsView: View {
                 ForEach(sections, id: \.letter) { section in
                     Section(section.letter) {
                         ForEach(section.items) { contact in
-                            if vm.chat(contact.id) != nil {
-                                NavigationLink(value: contact.id) { row(contact) }
-                                    .listRowBackground(.ultraThinMaterial)
-                            } else {
-                                row(contact)
-                                    .listRowBackground(.ultraThinMaterial)
-                            }
+                            contactEntry(for: contact)
                         }
                     }
                 }
@@ -51,6 +45,19 @@ struct ContactsView: View {
             .searchable(text: $query, prompt: Text("contacts.search"))
             .navigationTitle("contacts.title")
             .navigationDestination(for: Int64.self) { ChatView(chatID: $0) }
+        }
+    }
+
+    @ViewBuilder
+    private func contactEntry(for contact: Contact) -> some View {
+        if vm.chat(contact.id) != nil {
+            NavigationLink(value: contact.id) {
+                row(contact)
+            }
+            .listRowBackground(.ultraThinMaterial)
+        } else {
+            row(contact)
+                .listRowBackground(.ultraThinMaterial)
         }
     }
 
