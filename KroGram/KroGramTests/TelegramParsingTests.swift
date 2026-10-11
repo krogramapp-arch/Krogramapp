@@ -1,0 +1,98 @@
+import XCTest
+@testable import KroGram
+
+final class TelegramParsingTests: XCTestCase {
+    func testTextMessageParsing() {
+        let json: JSON = [
+            "id": 4_194_304,
+            "chat_id": 777,
+            "is_outgoing": true,
+            "date": 1_700_000_000,
+            "edit_date": 0,
+            "content": ["@type": "messageText", "text": ["@type": "formattedText", "text": "مرحبا"]],
+            "reply_to": ["@type": "messageReplyToMessage", "message_id": 4_000_000]
+        ]
+        let message = TGParse.message(json, lastReadOutbox: 0)
+        XCTAssertEqual(message.text, "مرحبا")
+        XCTAssertEqual(message.remoteID, 4_194_304)
+        XCTAssertEqual(message.replyToRemoteID, 4_000_000)
+        XCTAssertTrue(message.isOutgoing)
+        XCTAssertEqual(message.state, .sent)
+        XCTAssertFalse(message.isEdited)
+    }
+
+    func testOutgoingReadStateFollowsLastReadOutbox() {
+        let json: JSON = [
+            "id": 100, "is_outgoing": true, "date": 1,
+            "content": ["@type": "messageText", "text": ["text": "x"]]
+        ]
+        XCTAssertEqual(TGParse.message(json, lastReadOutbox: 100).state, .read)
+        XCTAssertEqual(TGParse.message(json, lastReadOutbox: 99).state, .sent)
+    }
+
+    func testSendingStates() {
+        var json: JSON = [
+            "id": 1, "is_outgoing": true, "date": 1,
+            "sending_state": ["@type": "messageSendingStatePending"],
+            "content": ["@type": "messageText", "text": ["text": "x"]]
+        ]
+        XCTAssertEqual(TGParse.message(json, lastReadOutbox: 0).state, .sending)
+        json["sending_state"] = ["@type": "messageSendingStateFailed"]
+        XCTAssertEqual(TGParse.message(json, lastReadOutbox: 0).state, .failed)
+    }
+
+    func testChatKindsAndFlags() {
+        let channel: JSON = [
+            "id": -1_001_234_567_890,
+            "title": "News",
+            "type": ["@type": "chatTypeSupergroup", "is_channel": true],
+            "unread_count": 7,
+            "notification_settings": ["mute_for": 3600],
+            "positions": [
+                ["list": ["@type": "chatListMain"], "order": "1", "is_pinned": true]
+            ]
+        ]
+        let chat = TGParse.chat(channel, lastReadOutbox: 0)
+        XCTAssertEqual(chat.id, -1_001_234_567_890)
+        XCTAssertEqual(chat.kind, .channel)
+        XCTAssertEqual(chat.unread, 7)
+        XCTAssertTrue(chat.isMuted)
+        XCTAssertTrue(chat.isPinned)
+        XCTAssertFalse(chat.isArchived)
+
+        let archivedGroup: JSON = [
+            "id": -5, "title": "G",
+            "type": ["@type": "chatTypeBasicGroup"],
+            "positions": [["list": ["@type": "chatListArchive"], "order": "2", "is_pinned": false]]
+        ]
+        let group = TGParse.chat(archivedGroup, lastReadOutbox: 0)
+        XCTAssertEqual(group.kind, .group)
+        XCTAssertTrue(group.isArchived)
+    }
+
+    func testUserParsing() {
+        let bot: JSON = [
+            "first_name": "Weather", "last_name": "Bot",
+            "type": ["@type": "userTypeBot"],
+            "status": ["@type": "userStatusOnline"],
+            "usernames": ["active_usernames": ["weather_bot"]]
+        ]
+        let user = TGParse.user(bot)
+        XCTAssertEqual(user.name, "Weather Bot")
+        XCTAssertTrue(user.isBot)
+        XCTAssertTrue(user.isOnline)
+        XCTAssertEqual(user.username, "weather_bot")
+    }
+
+    func testFloodWaitMessageContainsSeconds() {
+        let message = TGErrors.message(for: TDError(code: 429, message: "Too Many Requests: retry after 42"))
+        XCTAssertTrue(message.contains("42"))
+    }
+
+    func testCredentialsValidation() {
+        XCTAssertTrue(TelegramCredentials.isValid(apiID: 12345, apiHash: String(repeating: "a1", count: 16)))
+        XCTAssertFalse(TelegramCredentials.isValid(apiID: 0, apiHash: String(repeating: "a1", count: 16)))
+        XCTAssertFalse(TelegramCredentials.isValid(apiID: 1, apiHash: "short"))
+        XCTAssertFalse(TelegramCredentials.isValid(apiID: 1, apiHash: String(repeating: "z", count: 32)))
+    }
+}

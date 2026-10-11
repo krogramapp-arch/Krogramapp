@@ -12,22 +12,14 @@ workflows:
         - pattern: main
           include: true
     scripts:
-      - name: Extract KroGram source archive
+      - name: Locate KroGram project
         script: |
-          ZIP_PATH="$CM_BUILD_DIR/KroGram.zip"
-          if [ ! -f "$ZIP_PATH" ]; then
-            echo "KroGram.zip is missing from the repository root"
+          PROJECT_DIR="$CM_BUILD_DIR/KroGram"
+          if [ ! -f "$PROJECT_DIR/project.yml" ]; then
+            echo "KroGram/project.yml is missing from the repository"
             exit 1
           fi
-          EXTRACT_DIR="$CM_BUILD_DIR/archive"
-          mkdir -p "$EXTRACT_DIR"
-          unzip -q "$ZIP_PATH" -d "$EXTRACT_DIR"
-          PROJECT_YML="$(find "$EXTRACT_DIR" -type f -name project.yml -print -quit)"
-          if [ -z "$PROJECT_YML" ]; then
-            echo "No project.yml found in KroGram.zip"
-            exit 1
-          fi
-          echo "PROJECT_DIR=$(dirname "$PROJECT_YML")" >> "$CM_ENV"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$CM_ENV"
       - name: Install XcodeGen
         script: brew install xcodegen
       - name: Generate Xcode project
@@ -53,7 +45,7 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee "$CM_BUILD_DIR/xcodebuild-test.log"
     artifacts:
-      - archive/**/build/TestResults.xcresult
+      - KroGram/build/TestResults.xcresult
       - xcodebuild-test.log
 
   krogram-unsigned-ipa:
@@ -63,22 +55,14 @@ workflows:
     environment:
       xcode: latest
     scripts:
-      - name: Extract KroGram source archive
+      - name: Locate KroGram project
         script: |
-          ZIP_PATH="$CM_BUILD_DIR/KroGram.zip"
-          if [ ! -f "$ZIP_PATH" ]; then
-            echo "KroGram.zip is missing from the repository root"
+          PROJECT_DIR="$CM_BUILD_DIR/KroGram"
+          if [ ! -f "$PROJECT_DIR/project.yml" ]; then
+            echo "KroGram/project.yml is missing from the repository"
             exit 1
           fi
-          EXTRACT_DIR="$CM_BUILD_DIR/archive"
-          mkdir -p "$EXTRACT_DIR"
-          unzip -q "$ZIP_PATH" -d "$EXTRACT_DIR"
-          PROJECT_YML="$(find "$EXTRACT_DIR" -type f -name project.yml -print -quit)"
-          if [ -z "$PROJECT_YML" ]; then
-            echo "No project.yml found in KroGram.zip"
-            exit 1
-          fi
-          echo "PROJECT_DIR=$(dirname "$PROJECT_YML")" >> "$CM_ENV"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$CM_ENV"
       - name: Install XcodeGen
         script: brew install xcodegen
       - name: Generate Xcode project
@@ -126,22 +110,14 @@ workflows:
         distribution_type: ad_hoc
         bundle_identifier: com.krogram.app
     scripts:
-      - name: Extract KroGram source archive
+      - name: Locate KroGram project
         script: |
-          ZIP_PATH="$CM_BUILD_DIR/KroGram.zip"
-          if [ ! -f "$ZIP_PATH" ]; then
-            echo "KroGram.zip is missing from the repository root"
+          PROJECT_DIR="$CM_BUILD_DIR/KroGram"
+          if [ ! -f "$PROJECT_DIR/project.yml" ]; then
+            echo "KroGram/project.yml is missing from the repository"
             exit 1
           fi
-          EXTRACT_DIR="$CM_BUILD_DIR/archive"
-          mkdir -p "$EXTRACT_DIR"
-          unzip -q "$ZIP_PATH" -d "$EXTRACT_DIR"
-          PROJECT_YML="$(find "$EXTRACT_DIR" -type f -name project.yml -print -quit)"
-          if [ -z "$PROJECT_YML" ]; then
-            echo "No project.yml found in KroGram.zip"
-            exit 1
-          fi
-          echo "PROJECT_DIR=$(dirname "$PROJECT_YML")" >> "$CM_ENV"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$CM_ENV"
       - name: Install XcodeGen
         script: brew install xcodegen
       - name: Generate Xcode project

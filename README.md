@@ -4,9 +4,9 @@
 
 ## تجهيز المستودع
 
-ضع `KroGram.zip` و`codemagic.yaml` في جذر مستودع GitHub. يجب أن يحتوي ZIP على مجلد مشروع يتضمن `project.yml`، ومجلديّ `KroGram/` و`KroGramTests/`. لا ترفع مفاتيح أو ملفات توقيع سرية داخل الأرشيف.
+توجد ملفات التطبيق والاختبارات مباشرةً في مجلد `KroGram/`، وملف `codemagic.yaml` في جذر المستودع. يقرأ Codemagic المشروع من `KroGram/project.yml` دون الحاجة إلى فك أي أرشيف أثناء البناء. لا ترفع مفاتيح أو ملفات توقيع سرية إلى المستودع.
 
-يتضمن `KroGram.zip` مشروع KroGram ومصادر التطبيق والاختبارات اللازمة للبناء. يقرأ إعداد Codemagic هذا الأرشيف مباشرةً من جذر المستودع.
+يتضمن المشروع مجلدي `KroGram/KroGram/` لمصادر التطبيق و`KroGram/KroGramTests/` للاختبارات.
 
 ## البناء على Codemagic
 
@@ -28,4 +28,4 @@ Workflow الاختبارات يعمل تلقائيًا عند الدفع إلى
 
 ## تغيير معرّف التطبيق
 
-عدّل `PRODUCT_BUNDLE_IDENTIFIER` في `KroGram/project.yml` داخل `KroGram.zip` و`bundle_identifier` في Workflow التوقيع معًا قبل إعداد التوقيع. يجب أن يطابق المعرّف ملف provisioning في Apple Developer.
+عدّل `PRODUCT_BUNDLE_IDENTIFIER` في `KroGram/project.yml` و`bundle_identifier` في Workflow التوقيع معًا قبل إعداد التوقيع. يجب أن يطابق المعرّف ملف provisioning في Apple Developer.
