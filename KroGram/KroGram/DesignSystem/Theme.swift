@@ -78,6 +78,8 @@ enum FontChoice: String, Codable, CaseIterable, Identifiable {
 // MARK: - Theme
 
 struct KroTheme: Identifiable, Codable, Equatable {
+    static let currentSchemaVersion = 2
+
     var id: UUID
     var name: String
     var accentHex: String
@@ -87,6 +89,9 @@ struct KroTheme: Identifiable, Codable, Equatable {
     var density: ChatDensity
     var wallpaper: WallpaperStyle
     var isBuiltIn: Bool
+    var schemaVersion: Int
+    var background: BackgroundConfiguration
+    var neon: NeonConfiguration
 
     init(
         id: UUID = UUID(),
@@ -97,7 +102,10 @@ struct KroTheme: Identifiable, Codable, Equatable {
         fontScale: Double = 1.0,
         density: ChatDensity = .regular,
         wallpaper: WallpaperStyle = .gradient,
-        isBuiltIn: Bool = false
+        isBuiltIn: Bool = false,
+        schemaVersion: Int = KroTheme.currentSchemaVersion,
+        background: BackgroundConfiguration? = nil,
+        neon: NeonConfiguration = NeonConfiguration()
     ) {
         self.id = id
         self.name = name
@@ -108,6 +116,35 @@ struct KroTheme: Identifiable, Codable, Equatable {
         self.density = density
         self.wallpaper = wallpaper
         self.isBuiltIn = isBuiltIn
+        self.schemaVersion = schemaVersion
+        self.background = background ?? .migrated(from: wallpaper, accentHex: accentHex)
+        self.neon = neon
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, accentHex, bubbleRadius, fontChoice, fontScale
+        case density, wallpaper, isBuiltIn, schemaVersion, background, neon
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let accentHex = try values.decodeIfPresent(String.self, forKey: .accentHex) ?? "2F6BFF"
+        let wallpaper = try values.decodeIfPresent(WallpaperStyle.self, forKey: .wallpaper) ?? .gradient
+        self.init(
+            id: try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            name: try values.decodeIfPresent(String.self, forKey: .name) ?? "Imported",
+            accentHex: accentHex,
+            bubbleRadius: try values.decodeIfPresent(Double.self, forKey: .bubbleRadius) ?? 18,
+            fontChoice: try values.decodeIfPresent(FontChoice.self, forKey: .fontChoice) ?? .system,
+            fontScale: try values.decodeIfPresent(Double.self, forKey: .fontScale) ?? 1,
+            density: try values.decodeIfPresent(ChatDensity.self, forKey: .density) ?? .regular,
+            wallpaper: wallpaper,
+            isBuiltIn: try values.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false,
+            schemaVersion: Self.currentSchemaVersion,
+            background: try values.decodeIfPresent(BackgroundConfiguration.self, forKey: .background)
+                ?? .migrated(from: wallpaper, accentHex: accentHex),
+            neon: try values.decodeIfPresent(NeonConfiguration.self, forKey: .neon) ?? NeonConfiguration()
+        )
     }
 
     var accent: Color { Color(hex: accentHex) }
@@ -132,8 +169,25 @@ struct KroTheme: Identifiable, Codable, Equatable {
 
 struct ThemeBundle: Codable {
     var format = "krochat-theme"
-    var version = 1
+    var version = KroTheme.currentSchemaVersion
     var themes: [KroTheme]
+
+    private enum CodingKeys: String, CodingKey {
+        case format, version, themes
+    }
+
+    init(format: String = "krochat-theme", version: Int = KroTheme.currentSchemaVersion, themes: [KroTheme]) {
+        self.format = format
+        self.version = version
+        self.themes = themes
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        format = try values.decodeIfPresent(String.self, forKey: .format) ?? ""
+        version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        themes = try values.decode([KroTheme].self, forKey: .themes)
+    }
 }
 
 enum ThemeImportError: Error {
@@ -182,7 +236,16 @@ final class ThemeStore: ObservableObject {
         effects = defaults.string(forKey: Keys.effects).flatMap(EffectsLevel.init(rawValue:)) ?? .full
         if let data = defaults.data(forKey: Keys.custom),
            let list = try? JSONDecoder().decode([KroTheme].self, from: data) {
-            customThemes = list
+            customThemes = list.map { theme in
+                var migrated = theme
+                migrated.schemaVersion = KroTheme.currentSchemaVersion
+                migrated.background = migrated.background.validated()
+                migrated.neon = migrated.neon.validated()
+                return migrated
+            }
+            if let migratedData = try? JSONEncoder().encode(customThemes) {
+                defaults.set(migratedData, forKey: Keys.custom)
+            }
         } else {
             customThemes = []
         }
@@ -224,7 +287,9 @@ final class ThemeStore: ObservableObject {
     func exportJSON(for theme: KroTheme) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(ThemeBundle(themes: [theme])) else { return "" }
+        var exportTheme = theme
+        exportTheme.background.photoID = nil
+        guard let data = try? encoder.encode(ThemeBundle(themes: [exportTheme])) else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
     }
 
@@ -235,6 +300,7 @@ final class ThemeStore: ObservableObject {
         }
         guard let bundle = try? JSONDecoder().decode(ThemeBundle.self, from: data),
               bundle.format == "krochat-theme",
+              (1...KroTheme.currentSchemaVersion).contains(bundle.version),
               !bundle.themes.isEmpty,
               bundle.themes.count <= 10 else {
             throw ThemeImportError.invalid
@@ -248,6 +314,9 @@ final class ThemeStore: ObservableObject {
             theme.name = trimmed.isEmpty ? "Imported" : String(trimmed.prefix(40))
             theme.bubbleRadius = min(max(theme.bubbleRadius, 8), 28)
             theme.fontScale = min(max(theme.fontScale, 0.85), 1.3)
+            theme.schemaVersion = KroTheme.currentSchemaVersion
+            theme.background = theme.background.validated()
+            theme.neon = theme.neon.validated()
             customThemes.append(theme)
             added += 1
         }
@@ -256,7 +325,7 @@ final class ThemeStore: ObservableObject {
         return added
     }
 
-    static func isValidHex(_ hex: String) -> Bool {
+    nonisolated static func isValidHex(_ hex: String) -> Bool {
         hex.range(of: "^[0-9A-Fa-f]{6}$", options: .regularExpression) != nil
     }
 
