@@ -158,6 +158,50 @@ final class ThemeStoreTests: XCTestCase {
         XCTAssertTrue(backgrounds.allSatisfy { $0.validated() == $0 })
     }
 
+    func testDominantColorExtractionSelectsMostFrequentQuantizedColor() throws {
+        let blue = try XCTUnwrap(RGBColor(hex: "2F6BFF"))
+        let orange = try XCTUnwrap(RGBColor(hex: "F08030"))
+        let result = try XCTUnwrap(DominantColorExtractor.dominantColor(in: [blue, blue, blue, orange]))
+        let resultHSL = result.hueSaturationLightness
+        let blueHSL = blue.hueSaturationLightness
+        XCTAssertLessThan(abs(resultHSL.hue - blueHSL.hue), 8)
+        XCTAssertNil(DominantColorExtractor.dominantColor(in: []))
+    }
+
+    func testNeonDerivationShiftsDominantColorAndMeetsLightDarkContrast() throws {
+        let dominant = try XCTUnwrap(RGBColor(hex: "80A23C"))
+        let sourceHue = dominant.hueSaturationLightness.hue
+        let configuration = NeonConfiguration(mode: .automatic)
+
+        let variants = try XCTUnwrap(NeonColorEngine.variants(dominant: dominant, configuration: configuration))
+
+        XCTAssertGreaterThan(abs(variants.base.hueSaturationLightness.hue - sourceHue), 20)
+        XCTAssertGreaterThanOrEqual(
+            NeonColorEngine.contrastRatio(variants.light, RGBColor(red: 1, green: 1, blue: 1)),
+            4.5
+        )
+        XCTAssertGreaterThanOrEqual(
+            NeonColorEngine.contrastRatio(
+                variants.dark,
+                RGBColor(red: 0.055, green: 0.063, blue: 0.078)
+            ),
+            4.5
+        )
+    }
+
+    func testManualNeonColorIsPreservedWhileVariantsAreContrastAdjusted() throws {
+        let configuration = NeonConfiguration(mode: .manual, manualHex: "37E6FF")
+        let variants = try XCTUnwrap(
+            NeonColorEngine.variants(dominant: RGBColor(hex: "FF0000"), configuration: configuration)
+        )
+
+        XCTAssertEqual(variants.base.hex, "37E6FF")
+        XCTAssertGreaterThanOrEqual(
+            NeonColorEngine.contrastRatio(variants.light, RGBColor(red: 1, green: 1, blue: 1)),
+            4.5
+        )
+    }
+
     func testExportOmitsLocalPhotoReferenceAndImportsVersionOneBundle() throws {
         let store = ThemeStore(defaults: makeDefaults())
         var theme = KroTheme(name: "Photo", accentHex: "2F6BFF")
