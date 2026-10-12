@@ -54,10 +54,10 @@ struct ContactsView: View {
             NavigationLink(value: contact.id) {
                 row(contact)
             }
-            .listRowBackground(.ultraThinMaterial)
+            .listRowBackground(Rectangle().fill(.ultraThinMaterial))
         } else {
             row(contact)
-                .listRowBackground(.ultraThinMaterial)
+                .listRowBackground(Rectangle().fill(.ultraThinMaterial))
         }
     }
 
