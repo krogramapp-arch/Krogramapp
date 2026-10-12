@@ -290,6 +290,9 @@ struct ThemeEditorView: View {
         .navigationTitle("theme.editor")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: draft) { _, new in themes.update(new) }
+        .onChange(of: draft.wallpaper) { _, wallpaper in
+            draft.background = .migrated(from: wallpaper, accentHex: draft.accentHex)
+        }
     }
 }
 
@@ -302,7 +305,7 @@ struct ThemePreviewCard: View {
 
     var body: some View {
         ZStack {
-            ChatWallpaper(style: theme.wallpaper, accent: theme.accent)
+            ChatWallpaper(configuration: theme.background, accent: theme.accent)
             VStack(spacing: 8) {
                 HStack {
                     Text("theme.preview.in")

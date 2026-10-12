@@ -187,7 +187,7 @@ struct ChatView: View {
             }
             composer
         }
-        .background(ChatWallpaper(style: theme.wallpaper, accent: theme.accent).ignoresSafeArea())
+        .background(ChatWallpaper(configuration: theme.background, accent: theme.accent).ignoresSafeArea())
         .navigationTitle(chat.title)
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $showChatProfile) {

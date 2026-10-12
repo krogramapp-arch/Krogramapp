@@ -189,6 +189,16 @@
 "wallpaper.plain" = "سادة";
 "wallpaper.gradient" = "تدرّج";
 "wallpaper.dots" = "نقاط";
+"wallpaper.preset.classic" = "كلاسيكي";
+"wallpaper.preset.midnight" = "منتصف الليل";
+"wallpaper.preset.sunset" = "غروب";
+"wallpaper.preset.mint" = "نعناع";
+"wallpaper.preset.aurora" = "الشفق القطبي";
+"wallpaper.preset.nebula" = "سديم";
+"wallpaper.preset.oceanMesh" = "شبكة المحيط";
+"wallpaper.preset.roseDots" = "نقاط وردية";
+"wallpaper.preset.graphiteGrid" = "شبكة جرافيت";
+"wallpaper.preset.sandLines" = "خطوط رملية";
 "font.system" = "النظام";
 "font.rounded" = "مستدير";
 "font.serif" = "سيريف";

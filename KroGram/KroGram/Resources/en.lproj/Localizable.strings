@@ -189,6 +189,16 @@
 "wallpaper.plain" = "Plain";
 "wallpaper.gradient" = "Gradient";
 "wallpaper.dots" = "Dots";
+"wallpaper.preset.classic" = "Classic";
+"wallpaper.preset.midnight" = "Midnight";
+"wallpaper.preset.sunset" = "Sunset";
+"wallpaper.preset.mint" = "Mint";
+"wallpaper.preset.aurora" = "Aurora";
+"wallpaper.preset.nebula" = "Nebula";
+"wallpaper.preset.oceanMesh" = "Ocean mesh";
+"wallpaper.preset.roseDots" = "Rose dots";
+"wallpaper.preset.graphiteGrid" = "Graphite grid";
+"wallpaper.preset.sandLines" = "Sand lines";
 "font.system" = "System";
 "font.rounded" = "Rounded";
 "font.serif" = "Serif";

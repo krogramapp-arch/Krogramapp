@@ -151,6 +151,13 @@ final class ThemeStoreTests: XCTestCase {
         XCTAssertEqual(safeNeon.borderWidth, 4)
     }
 
+    func testBackgroundPresetsAreCodeDrawnAndUnique() {
+        XCTAssertGreaterThanOrEqual(BackgroundPreset.allCases.count, 10)
+        let backgrounds = BackgroundPreset.allCases.map(\.configuration)
+        XCTAssertEqual(Set(BackgroundPreset.allCases.map(\.rawValue)).count, backgrounds.count)
+        XCTAssertTrue(backgrounds.allSatisfy { $0.validated() == $0 })
+    }
+
     func testExportOmitsLocalPhotoReferenceAndImportsVersionOneBundle() throws {
         let store = ThemeStore(defaults: makeDefaults())
         var theme = KroTheme(name: "Photo", accentHex: "2F6BFF")

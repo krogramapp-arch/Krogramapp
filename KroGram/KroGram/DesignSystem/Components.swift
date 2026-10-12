@@ -186,34 +186,171 @@ struct UndoBannerView: View {
 // MARK: - Wallpaper
 
 struct ChatWallpaper: View {
-    let style: WallpaperStyle
+    private let configuration: BackgroundConfiguration
     let accent: Color
+    @EnvironmentObject private var themes: ThemeStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(style: WallpaperStyle, accent: Color) {
+        self.configuration = .migrated(from: style, accentHex: accent.toHex())
+        self.accent = accent
+    }
+
+    init(configuration: BackgroundConfiguration, accent: Color) {
+        self.configuration = configuration.validated()
+        self.accent = accent
+    }
+
+    private var colors: [Color] {
+        configuration.gradientHexes.map { Color(hex: $0) }
+    }
+
+    @ViewBuilder
+    private var gradient: some View {
+        switch configuration.gradientKind {
+        case .linear:
+            let radians = configuration.angle * .pi / 180
+            let dx = cos(radians) / 2
+            let dy = sin(radians) / 2
+            LinearGradient(
+                colors: colors,
+                startPoint: UnitPoint(x: 0.5 - dx, y: 0.5 - dy),
+                endPoint: UnitPoint(x: 0.5 + dx, y: 0.5 + dy)
+            )
+        case .radial:
+            RadialGradient(colors: colors, center: .center, startRadius: 0, endRadius: 520)
+        case .angular:
+            AngularGradient(colors: colors, center: .center)
+        }
+    }
+
+    private var shouldAnimate: Bool {
+        themes.shouldAnimate(reduceMotion: reduceMotion)
+    }
 
     var body: some View {
-        switch style {
-        case .plain:
-            Color(.systemBackground)
-        case .gradient:
-            LinearGradient(
-                colors: [accent.opacity(0.14), Color(.systemBackground)],
-                startPoint: .top, endPoint: .bottom
+        let config = configuration.validated()
+        ZStack {
+            switch config.kind {
+            case .solid:
+                Color(hex: config.solidHex)
+            case .gradient:
+                gradient
+            case .aurora:
+                TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: !shouldAnimate)) { timeline in
+                    auroraCanvas(size: timeline.date.timeIntervalSinceReferenceDate)
+                }
+            case .mesh:
+                meshCanvas
+            case .pattern:
+                patternCanvas
+            case .photo:
+                Color(hex: config.solidHex)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func auroraCanvas(size time: TimeInterval) -> some View {
+        Canvas { context, canvasSize in
+            let bounds = CGRect(origin: .zero, size: canvasSize)
+            context.fill(Path(bounds), with: .linearGradient(
+                Gradient(colors: colors),
+                startPoint: .zero,
+                endPoint: CGPoint(x: canvasSize.width, y: canvasSize.height)
+            ))
+            let count = configuration.auroraBlobCount.clamped(to: 2...8)
+            let phase = shouldAnimate ? time * configuration.auroraSpeed : 0
+            for index in 0..<count {
+                let angle = phase + Double(index) * (.pi * 2 / Double(count))
+                let center = CGPoint(
+                    x: canvasSize.width * (0.5 + 0.32 * cos(angle)),
+                    y: canvasSize.height * (0.5 + 0.3 * sin(angle * 0.83))
+                )
+                let radius = max(canvasSize.width, canvasSize.height) * configuration.auroraSize * 0.42
+                let color = colors[index % colors.count]
+                let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+                context.fill(
+                    Path(ellipseIn: rect),
+                    with: .radialGradient(
+                        Gradient(colors: [color.opacity(0.62), color.opacity(0)]),
+                        center: center,
+                        startRadius: 0,
+                        endRadius: radius
+                    )
+                )
+            }
+        }
+        .blur(radius: configuration.auroraBlur)
+    }
+
+    private var meshCanvas: some View {
+        Canvas { context, size in
+            let bounds = CGRect(origin: .zero, size: size)
+            context.fill(Path(bounds), with: .color(Color(hex: configuration.solidHex)))
+            for point in configuration.meshPoints.prefix(16) {
+                let center = CGPoint(x: size.width * point.x, y: size.height * point.y)
+                let radius = max(size.width, size.height) * 0.72
+                let color = Color(hex: point.hex)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
+                    with: .radialGradient(
+                        Gradient(colors: [color.opacity(0.9), color.opacity(0)]),
+                        center: center,
+                        startRadius: 0,
+                        endRadius: radius
+                    )
+                )
+            }
+        }
+    }
+
+    private var patternCanvas: some View {
+        Canvas { context, size in
+            context.fill(
+                Path(CGRect(origin: .zero, size: size)),
+                with: .color(Color(hex: configuration.solidHex))
             )
-        case .dots:
-            ZStack {
-                Color(.systemBackground)
-                Canvas { context, size in
-                    let step: CGFloat = 28
-                    var y: CGFloat = 0
-                    while y < size.height {
-                        var x: CGFloat = 0
-                        while x < size.width {
-                            context.fill(
-                                Path(ellipseIn: CGRect(x: x, y: y, width: 2.5, height: 2.5)),
-                                with: .color(accent.opacity(0.18))
-                            )
-                            x += step
-                        }
-                        y += step
+            let step = CGFloat(48 - configuration.patternDensity * 34)
+            let color = accent.opacity(configuration.patternOpacity)
+            switch configuration.pattern {
+            case .dots:
+                for y in stride(from: CGFloat(0), through: size.height, by: step) {
+                    for x in stride(from: CGFloat(0), through: size.width, by: step) {
+                        context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 2.5, height: 2.5)), with: .color(color))
+                    }
+                }
+            case .lines:
+                for y in stride(from: CGFloat(0), through: size.height, by: step) {
+                    var path = Path()
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: size.width, y: y + 24))
+                    context.stroke(path, with: .color(color), lineWidth: 1)
+                }
+            case .grid:
+                for x in stride(from: CGFloat(0), through: size.width, by: step) {
+                    var path = Path()
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: size.height))
+                    context.stroke(path, with: .color(color), lineWidth: 0.7)
+                }
+                for y in stride(from: CGFloat(0), through: size.height, by: step) {
+                    var path = Path()
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: size.width, y: y))
+                    context.stroke(path, with: .color(color), lineWidth: 0.7)
+                }
+            case .geometric:
+                for y in stride(from: CGFloat(0), through: size.height, by: step * 1.5) {
+                    for x in stride(from: CGFloat(0), through: size.width, by: step * 1.5) {
+                        let rect = CGRect(x: x, y: y, width: step * 0.55, height: step * 0.55)
+                        var path = Path()
+                        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+                        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+                        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+                        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+                        path.closeSubpath()
+                        context.stroke(path, with: .color(color), lineWidth: 1)
                     }
                 }
             }

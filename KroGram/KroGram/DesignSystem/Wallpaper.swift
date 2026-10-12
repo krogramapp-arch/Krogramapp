@@ -146,6 +146,43 @@ struct BackgroundConfiguration: Codable, Equatable {
     }
 }
 
+enum BackgroundPreset: String, CaseIterable, Identifiable {
+    case classic, midnight, sunset, mint, aurora, nebula, oceanMesh, roseDots, graphiteGrid, sandLines
+
+    var id: String { rawValue }
+    var titleKey: String { "wallpaper.preset.\(rawValue)" }
+
+    var configuration: BackgroundConfiguration {
+        switch self {
+        case .classic:
+            BackgroundConfiguration(kind: .gradient, gradientHexes: ["192C59", "3B5D9A", "B8DDF0"])
+        case .midnight:
+            BackgroundConfiguration(kind: .gradient, gradientHexes: ["090B18", "182447", "243B68"], angle: 155)
+        case .sunset:
+            BackgroundConfiguration(kind: .gradient, gradientHexes: ["421B55", "D75362", "F6B66B"], angle: 45)
+        case .mint:
+            BackgroundConfiguration(kind: .gradient, gradientHexes: ["103D42", "32A287", "C4E7BD"], angle: 110)
+        case .aurora:
+            BackgroundConfiguration(kind: .aurora, gradientHexes: ["071B34", "193962", "241D53"], auroraBlobCount: 5)
+        case .nebula:
+            BackgroundConfiguration(kind: .aurora, gradientHexes: ["170D2E", "46286E", "0C4156"], auroraBlobCount: 6, auroraSpeed: 0.18, auroraBlur: 64)
+        case .oceanMesh:
+            BackgroundConfiguration(kind: .mesh, meshPoints: [
+                MeshColorPoint(x: 0.12, y: 0.2, hex: "063A5B"),
+                MeshColorPoint(x: 0.82, y: 0.12, hex: "1F8A9B"),
+                MeshColorPoint(x: 0.2, y: 0.82, hex: "115E59"),
+                MeshColorPoint(x: 0.86, y: 0.8, hex: "60B6A2")
+            ])
+        case .roseDots:
+            BackgroundConfiguration(kind: .pattern, solidHex: "341E32", pattern: .dots, patternDensity: 0.58, patternOpacity: 0.25)
+        case .graphiteGrid:
+            BackgroundConfiguration(kind: .pattern, solidHex: "1C222B", pattern: .grid, patternDensity: 0.42, patternOpacity: 0.24)
+        case .sandLines:
+            BackgroundConfiguration(kind: .pattern, solidHex: "594C3D", pattern: .lines, patternDensity: 0.3, patternOpacity: 0.2)
+        }
+    }
+}
+
 extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self {
         min(max(self, range.lowerBound), range.upperBound)
