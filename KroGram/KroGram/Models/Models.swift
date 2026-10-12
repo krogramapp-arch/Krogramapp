@@ -1,6 +1,6 @@
 import Foundation
 
-enum ChatKind: String, CaseIterable, Identifiable, Codable, Sendable {
+enum ChatKind: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
     case direct, group, channel, bot
     var id: String { rawValue }
 
@@ -18,6 +18,42 @@ enum DeliveryState: String, Codable, Sendable {
     case sending, sent, read, failed
 }
 
+enum MessageEntityKind: Hashable, Sendable {
+    case bold, italic, code, pre, quote, spoiler
+    case underline, strikethrough
+    case url, email, phoneNumber, mention, hashtag, cashtag, botCommand
+    case textURL(String)
+    case mentionName(Int64)
+}
+
+struct MessageEntity: Hashable, Sendable {
+    var offset: Int
+    var length: Int
+    var kind: MessageEntityKind
+}
+
+struct PollOption: Hashable, Sendable {
+    var text: String
+    var voterCount: Int
+    var votePercentage: Int
+    var isChosen: Bool
+}
+
+struct MessagePoll: Hashable, Sendable {
+    var question: String
+    var options: [PollOption]
+    var totalVoterCount: Int
+    var allowsMultipleAnswers: Bool
+    var isClosed: Bool
+}
+
+struct TelegramSticker: Identifiable, Hashable, Sendable {
+    let id: Int64
+    let emoji: String
+    let width: Int
+    let height: Int
+}
+
 struct Message: Identifiable, Hashable, Sendable {
     let id: UUID
     var text: String
@@ -26,12 +62,16 @@ struct Message: Identifiable, Hashable, Sendable {
     var state: DeliveryState
     var replyToID: UUID?
     var reactions: [String]
+    var chosenReactions: [String]
     var isEdited: Bool
+    var isPinned: Bool
     /// Telegram message id (nil for demo data and for messages not yet acknowledged).
     var remoteID: Int64?
     var replyToRemoteID: Int64?
     var media: MessageMedia?
     var isUnsupportedContent: Bool
+    var entities: [MessageEntity]
+    var poll: MessagePoll?
 
     init(
         id: UUID = UUID(),
@@ -41,11 +81,15 @@ struct Message: Identifiable, Hashable, Sendable {
         state: DeliveryState = .sent,
         replyToID: UUID? = nil,
         reactions: [String] = [],
+        chosenReactions: [String] = [],
         isEdited: Bool = false,
+        isPinned: Bool = false,
         remoteID: Int64? = nil,
         replyToRemoteID: Int64? = nil,
         media: MessageMedia? = nil,
-        isUnsupportedContent: Bool = false
+        isUnsupportedContent: Bool = false,
+        entities: [MessageEntity] = [],
+        poll: MessagePoll? = nil
     ) {
         self.id = id
         self.text = text
@@ -54,11 +98,15 @@ struct Message: Identifiable, Hashable, Sendable {
         self.state = state
         self.replyToID = replyToID
         self.reactions = reactions
+        self.chosenReactions = chosenReactions
         self.isEdited = isEdited
+        self.isPinned = isPinned
         self.remoteID = remoteID
         self.replyToRemoteID = replyToRemoteID
         self.media = media
         self.isUnsupportedContent = isUnsupportedContent
+        self.entities = entities
+        self.poll = poll
     }
 }
 
@@ -73,6 +121,7 @@ struct MessageMedia: Hashable, Sendable {
     let mimeType: String?
     let fileSize: Int64
     let caption: String
+    let captionEntities: [MessageEntity]
 }
 
 struct Chat: Identifiable, Hashable, Sendable {

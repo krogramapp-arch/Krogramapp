@@ -21,10 +21,19 @@ protocol ChatRepository: Sendable {
     func downloadFileData(fileID: Int64, limit: Int64) async throws -> Data
     func cancelFileDownload(fileID: Int64) async throws
     func sendPhoto(chatID: Int64, path: String, caption: String) async throws
+    func sendVideo(chatID: Int64, path: String, caption: String) async throws
+    func sendVideoNote(chatID: Int64, path: String, duration: Int, length: Int) async throws
+    func sendVoiceNote(chatID: Int64, path: String, duration: Int) async throws
+    func sendPoll(chatID: Int64, question: String, options: [String], isAnonymous: Bool, allowsMultipleAnswers: Bool) async throws
+    func sendContact(chatID: Int64, firstName: String, lastName: String, phoneNumber: String) async throws
+    func sendLocation(chatID: Int64, latitude: Double, longitude: Double) async throws
+    func votePoll(chatID: Int64, messageID: Int64, optionIDs: [Int]) async throws -> Message?
+    func loadStickers() async throws -> [TelegramSticker]
+    func sendSticker(chatID: Int64, sticker: TelegramSticker) async throws
     func sendDocument(chatID: Int64, path: String, caption: String) async throws
     func clearMediaCache() async throws
     /// Returns nil when the repository has no remote backend (demo): caller falls back to `send(text:chatID:)`.
-    func sendRemote(text: String, chatID: Int64, replyToRemoteID: Int64?) async throws -> Message?
+    func sendRemote(text: String, chatID: Int64, replyToRemoteID: Int64?, entities: [MessageEntity]) async throws -> Message?
     func editRemote(chatID: Int64, messageID: Int64, text: String) async throws
     func deleteRemote(chatID: Int64, messageID: Int64) async throws
     func markRead(chatID: Int64, remoteIDs: [Int64]) async
@@ -32,6 +41,10 @@ protocol ChatRepository: Sendable {
     func sendTyping(chatID: Int64) async
     func setPinned(chatID: Int64, pinned: Bool) async throws
     func setArchived(chatID: Int64, archived: Bool) async throws
+    func setMessageReaction(chatID: Int64, messageID: Int64, emoji: String?) async throws -> [String]?
+    func setMessagePinned(chatID: Int64, messageID: Int64, pinned: Bool) async throws
+    func forwardMessages(fromChatID: Int64, toChatID: Int64, messageIDs: [Int64]) async throws
+    func searchMessages(chatID: Int64, query: String, fromMessageID: Int64, limit: Int) async throws -> [Message]?
     func apply(privacy: PrivacySnapshot) async
     func setForeground(_ foreground: Bool) async
 }
@@ -55,11 +68,36 @@ extension ChatRepository {
     func sendPhoto(chatID: Int64, path: String, caption: String) async throws {
         throw MockRepositoryError.unsupported
     }
+    func sendVideo(chatID: Int64, path: String, caption: String) async throws {
+        throw MockRepositoryError.unsupported
+    }
+    func sendVideoNote(chatID: Int64, path: String, duration: Int, length: Int) async throws {
+        throw MockRepositoryError.unsupported
+    }
+    func sendVoiceNote(chatID: Int64, path: String, duration: Int) async throws {
+        throw MockRepositoryError.unsupported
+    }
+    func sendPoll(chatID: Int64, question: String, options: [String], isAnonymous: Bool, allowsMultipleAnswers: Bool) async throws {
+        throw MockRepositoryError.unsupported
+    }
+    func sendContact(chatID: Int64, firstName: String, lastName: String, phoneNumber: String) async throws {
+        throw MockRepositoryError.unsupported
+    }
+    func sendLocation(chatID: Int64, latitude: Double, longitude: Double) async throws {
+        throw MockRepositoryError.unsupported
+    }
+    func votePoll(chatID: Int64, messageID: Int64, optionIDs: [Int]) async throws -> Message? {
+        throw MockRepositoryError.unsupported
+    }
+    func loadStickers() async throws -> [TelegramSticker] { throw MockRepositoryError.unsupported }
+    func sendSticker(chatID: Int64, sticker: TelegramSticker) async throws {
+        throw MockRepositoryError.unsupported
+    }
     func sendDocument(chatID: Int64, path: String, caption: String) async throws {
         throw MockRepositoryError.unsupported
     }
     func clearMediaCache() async throws {}
-    func sendRemote(text: String, chatID: Int64, replyToRemoteID: Int64?) async throws -> Message? { nil }
+    func sendRemote(text: String, chatID: Int64, replyToRemoteID: Int64?, entities: [MessageEntity]) async throws -> Message? { nil }
     func editRemote(chatID: Int64, messageID: Int64, text: String) async throws {}
     func deleteRemote(chatID: Int64, messageID: Int64) async throws {}
     func markRead(chatID: Int64, remoteIDs: [Int64]) async {}
@@ -67,6 +105,18 @@ extension ChatRepository {
     func sendTyping(chatID: Int64) async {}
     func setPinned(chatID: Int64, pinned: Bool) async throws {}
     func setArchived(chatID: Int64, archived: Bool) async throws {}
+    func setMessageReaction(chatID: Int64, messageID: Int64, emoji: String?) async throws -> [String]? {
+        throw MockRepositoryError.unsupported
+    }
+    func setMessagePinned(chatID: Int64, messageID: Int64, pinned: Bool) async throws {
+        throw MockRepositoryError.unsupported
+    }
+    func forwardMessages(fromChatID: Int64, toChatID: Int64, messageIDs: [Int64]) async throws {
+        throw MockRepositoryError.unsupported
+    }
+    func searchMessages(chatID: Int64, query: String, fromMessageID: Int64, limit: Int) async throws -> [Message]? {
+        nil
+    }
     func apply(privacy: PrivacySnapshot) async {}
     func setForeground(_ foreground: Bool) async {}
 }

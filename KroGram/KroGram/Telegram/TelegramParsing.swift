@@ -16,6 +16,15 @@ enum TGParse {
     static func contentText(_ content: JSON) -> String {
         let type = string(content["@type"])
         let caption = string((content["caption"] as? JSON)?["text"])
+        let venue = content["venue"] as? JSON ?? [:]
+        let point = (content["location"] as? JSON) ?? (venue["location"] as? JSON) ?? [:]
+        let coordinates: String
+        if let latitude = (point["latitude"] as? NSNumber)?.doubleValue,
+           let longitude = (point["longitude"] as? NSNumber)?.doubleValue {
+            coordinates = String(format: "%.5f, %.5f", latitude, longitude)
+        } else {
+            coordinates = ""
+        }
         func labeled(_ key: String) -> String {
             caption.isEmpty ? L(key) : L(key) + " " + caption
         }
@@ -29,11 +38,89 @@ enum TGParse {
         case "messageVoiceNote": return labeled("msg.voice")
         case "messageVideoNote": return L("msg.videoNote")
         case "messageSticker": return L("msg.sticker")
-        case "messagePoll": return L("msg.poll")
-        case "messageContact": return L("msg.contact")
-        case "messageLocation", "messageVenue": return L("msg.location")
+        case "messagePoll":
+            return L("msg.poll")
+        case "messageContact":
+            let contact = content["contact"] as? JSON ?? [:]
+            let name = [string(contact["first_name"]), string(contact["last_name"])]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            let phone = string(contact["phone_number"])
+            return [L("msg.contact"), name, phone].filter { !$0.isEmpty }.joined(separator: "\n")
+        case "messageLocation":
+            return L("msg.location") + "\n" + coordinates
+        case "messageVenue":
+            let title = string(venue["title"])
+            let address = string(venue["address"])
+            return [L("msg.location"), title, address, coordinates].filter { !$0.isEmpty }.joined(separator: "\n")
         default: return L("msg.unsupported")
         }
+    }
+
+    static func entities(_ values: Any?) -> [MessageEntity] {
+        (values as? [JSON] ?? []).compactMap { entity in
+            let offset = Int(int64(entity["offset"]))
+            let length = Int(int64(entity["length"]))
+            guard offset >= 0, length > 0, let type = entity["type"] as? JSON else { return nil }
+            let kind: MessageEntityKind
+            switch string(type["@type"]) {
+            case "textEntityTypeBold": kind = .bold
+            case "textEntityTypeItalic": kind = .italic
+            case "textEntityTypeCode": kind = .code
+            case "textEntityTypePre", "textEntityTypePreCode": kind = .pre
+            case "textEntityTypeBlockQuote", "textEntityTypeExpandableBlockQuote": kind = .quote
+            case "textEntityTypeSpoiler": kind = .spoiler
+            case "textEntityTypeUnderline": kind = .underline
+            case "textEntityTypeStrikethrough": kind = .strikethrough
+            case "textEntityTypeUrl": kind = .url
+            case "textEntityTypeEmailAddress": kind = .email
+            case "textEntityTypePhoneNumber": kind = .phoneNumber
+            case "textEntityTypeMention": kind = .mention
+            case "textEntityTypeHashtag": kind = .hashtag
+            case "textEntityTypeCashtag": kind = .cashtag
+            case "textEntityTypeBotCommand": kind = .botCommand
+            case "textEntityTypeTextUrl":
+                let url = string(type["url"])
+                guard !url.isEmpty else { return nil }
+                kind = .textURL(url)
+            case "textEntityTypeMentionName":
+                let userID = int64(type["user_id"])
+                guard userID != 0 else { return nil }
+                kind = .mentionName(userID)
+            default:
+                return nil
+            }
+            return MessageEntity(offset: offset, length: length, kind: kind)
+        }
+    }
+
+    static func entityJSON(_ entity: MessageEntity) -> JSON {
+        let type: JSON
+        switch entity.kind {
+        case .bold: type = ["@type": "textEntityTypeBold"]
+        case .italic: type = ["@type": "textEntityTypeItalic"]
+        case .code: type = ["@type": "textEntityTypeCode"]
+        case .pre: type = ["@type": "textEntityTypePreCode", "language": ""]
+        case .quote: type = ["@type": "textEntityTypeBlockQuote", "is_expandable": false]
+        case .spoiler: type = ["@type": "textEntityTypeSpoiler"]
+        case .underline: type = ["@type": "textEntityTypeUnderline"]
+        case .strikethrough: type = ["@type": "textEntityTypeStrikethrough"]
+        case .url: type = ["@type": "textEntityTypeUrl"]
+        case .email: type = ["@type": "textEntityTypeEmailAddress"]
+        case .phoneNumber: type = ["@type": "textEntityTypePhoneNumber"]
+        case .mention: type = ["@type": "textEntityTypeMention"]
+        case .hashtag: type = ["@type": "textEntityTypeHashtag"]
+        case .cashtag: type = ["@type": "textEntityTypeCashtag"]
+        case .botCommand: type = ["@type": "textEntityTypeBotCommand"]
+        case .textURL(let url): type = ["@type": "textEntityTypeTextUrl", "url": url]
+        case .mentionName(let userID): type = ["@type": "textEntityTypeMentionName", "user_id": userID]
+        }
+        return [
+            "@type": "textEntity",
+            "offset": entity.offset,
+            "length": entity.length,
+            "type": type
+        ]
     }
 
     static func media(_ content: JSON) -> MessageMedia? {
@@ -99,14 +186,6 @@ enum TGParse {
             return nil
         }
 
-        static func isUnsupportedContent(_ content: JSON) -> Bool {
-            ![
-                "messageText", "messagePhoto", "messageVideo", "messageAnimation",
-                "messageDocument", "messageAudio", "messageVoiceNote",
-                "messageVideoNote", "messageSticker"
-            ].contains(string(content["@type"]))
-        }
-
         let id = int64(file["id"])
         guard id != 0 else { return nil }
         return MessageMedia(
@@ -115,8 +194,74 @@ enum TGParse {
             fileName: fileName.flatMap { $0.isEmpty ? nil : $0 },
             mimeType: mimeType.flatMap { $0.isEmpty ? nil : $0 },
             fileSize: fileSize,
-            caption: string((content["caption"] as? JSON)?["text"])
+            caption: string((content["caption"] as? JSON)?["text"]),
+            captionEntities: entities((content["caption"] as? JSON)?["entities"])
         )
+    }
+
+    static func isUnsupportedContent(_ content: JSON) -> Bool {
+        ![
+            "messageText", "messagePhoto", "messageVideo", "messageAnimation",
+            "messageDocument", "messageAudio", "messageVoiceNote",
+            "messageVideoNote", "messageSticker", "messagePoll",
+            "messageContact", "messageLocation", "messageVenue"
+        ].contains(string(content["@type"]))
+    }
+
+    static func reactions(_ message: JSON) -> [String] {
+        reactionDetails(message).all
+    }
+
+    static func poll(_ content: JSON) -> MessagePoll? {
+        guard string(content["@type"]) == "messagePoll",
+              let poll = content["poll"] as? JSON else { return nil }
+        let question = string((poll["question"] as? JSON)?["text"])
+        let options = (poll["options"] as? [JSON] ?? []).map { option in
+            PollOption(
+                text: string((option["text"] as? JSON)?["text"]),
+                voterCount: Int(int64(option["voter_count"])),
+                votePercentage: Int(int64(option["vote_percentage"])),
+                isChosen: (option["is_chosen"] as? Bool) == true
+            )
+        }
+        guard !question.isEmpty, !options.isEmpty else { return nil }
+        return MessagePoll(
+            question: question,
+            options: options,
+            totalVoterCount: Int(int64(poll["total_voter_count"])),
+            allowsMultipleAnswers: (poll["allows_multiple_answers"] as? Bool) == true,
+            isClosed: (poll["is_closed"] as? Bool) == true
+        )
+    }
+
+    static func stickers(_ set: JSON) -> [TelegramSticker] {
+        (set["stickers"] as? [JSON] ?? []).compactMap { sticker in
+            let file = sticker["sticker"] as? JSON ?? [:]
+            let fileID = int64(file["id"])
+            guard fileID != 0 else { return nil }
+            return TelegramSticker(
+                id: fileID,
+                emoji: string(sticker["emoji"]),
+                width: Int(int64(sticker["width"])),
+                height: Int(int64(sticker["height"]))
+            )
+        }
+    }
+
+    static func reactionDetails(_ message: JSON) -> (all: [String], chosen: [String]) {
+        let interactionInfo = message["interaction_info"] as? JSON ?? [:]
+        let reactions = (interactionInfo["reactions"] as? JSON)?["reactions"] as? [JSON] ?? []
+        var all: [String] = []
+        var chosen: [String] = []
+        for item in reactions {
+            let type = item["type"] as? JSON ?? [:]
+            guard string(type["@type"]) == "reactionTypeEmoji" else { continue }
+            let emoji = string(type["emoji"])
+            guard !emoji.isEmpty else { continue }
+            all.append(emoji)
+            if (item["is_chosen"] as? Bool) == true { chosen.append(emoji) }
+        }
+        return (all, chosen)
     }
 
     static func message(_ m: JSON, lastReadOutbox: Int64) -> Message {
@@ -129,16 +274,22 @@ enum TGParse {
             state = .read
         }
         let replyID = int64((m["reply_to"] as? JSON)?["message_id"])
+        let reactionDetails = reactionDetails(m)
         return Message(
             text: contentText(m["content"] as? JSON ?? [:]),
             date: Date(timeIntervalSince1970: TimeInterval(int64(m["date"]))),
             isOutgoing: outgoing,
             state: state,
             isEdited: int64(m["edit_date"]) > 0,
+            isPinned: (m["is_pinned"] as? Bool) ?? false,
             remoteID: id,
             replyToRemoteID: replyID == 0 ? nil : replyID,
             media: media(m["content"] as? JSON ?? [:]),
-            isUnsupportedContent: isUnsupportedContent(m["content"] as? JSON ?? [:])
+            isUnsupportedContent: isUnsupportedContent(m["content"] as? JSON ?? [:]),
+            entities: entities(((m["content"] as? JSON)?["text"] as? JSON)?["entities"]),
+            reactions: reactionDetails.all,
+            chosenReactions: reactionDetails.chosen,
+            poll: poll(m["content"] as? JSON ?? [:])
         )
     }
 
@@ -234,6 +385,17 @@ enum TGErrors {
         case "MEDIA_CACHE_FULL": return L("err.mediaCacheFull")
         case "FILE_DOWNLOAD_TIMEOUT": return L("err.fileDownloadTimeout")
         case "OUTGOING_STORAGE_FULL": return L("err.outgoingStorageFull")
+        case "FORWARD_NOT_ALLOWED": return L("err.forwardRestricted")
+        case "MICROPHONE_PERMISSION_DENIED": return L("err.microphonePermission")
+        case "AUDIO_RECORDING_FAILED": return L("err.audioRecording")
+        case "AUDIO_RECORDING_TOO_SHORT": return L("err.audioTooShort")
+        case "MEDIA_READ_FAILED": return L("err.mediaRead")
+        case "INVALID_MEDIA_DURATION": return L("err.mediaDuration")
+        case "INVALID_VIDEO_NOTE": return L("err.videoNote")
+        case "INVALID_POLL": return L("err.invalidPoll")
+        case "INVALID_POLL_ANSWER": return L("err.invalidPollAnswer")
+        case "INVALID_CONTACT": return L("err.invalidContact")
+        case "INVALID_LOCATION": return L("err.invalidLocation")
         default: break
         }
         if td.code == 429 || td.message.hasPrefix("FLOOD_WAIT") {
@@ -241,10 +403,11 @@ enum TGErrors {
             if let seconds = Int(digits) { return String(format: L("err.flood"), seconds) }
         }
 
-        private extension Int64 {
-            var nonZero: Int64? { self == 0 ? nil : self }
-        }
         if let key = known[td.message] { return L(key) }
         return L("err.generic")
     }
+}
+
+private extension Int64 {
+    var nonZero: Int64? { self == 0 ? nil : self }
 }

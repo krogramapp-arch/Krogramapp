@@ -23,6 +23,11 @@ final class ChatsViewModel: ObservableObject {
     @Published private(set) var profile: TelegramProfile?
     @Published private(set) var profileLoading = false
     @Published private(set) var drafts: [Int64: String] = [:]
+    @Published private(set) var messageSearchResults: [Int64: [Message]] = [:]
+    @Published private(set) var messageSearchQueries: [Int64: String] = [:]
+    @Published private(set) var searchingChats: Set<Int64> = []
+    @Published private(set) var stickers: [TelegramSticker] = []
+    @Published private(set) var stickersLoading = false
     @Published private(set) var connection: ConnectionState = .ready
     @Published var searchText = ""
     @Published var filter: ChatFilter = .all
@@ -39,9 +44,13 @@ final class ChatsViewModel: ObservableObject {
     private var lastTyping: [Int64: Date] = [:]
     private var historyLoading: Set<Int64> = []
     private var historyExhausted: Set<Int64> = []
+    private var searchCursors: [Int64: Int64] = [:]
+    private var searchExhausted: Set<Int64> = []
+    private var searchTokens: [Int64: UUID] = [:]
     private var activeChatID: Int64?
     private var moreChatsExhausted = false
     private var contactsLoaded = false
+    private var stickersLoaded = false
     private var mediaTasks: [Int64: Task<Data, Error>] = [:]
     private var dataCache: [Int64: Data] = [:]
     private var dataCacheOrder: [Int64] = []
@@ -81,9 +90,12 @@ final class ChatsViewModel: ObservableObject {
         chats = []
         folders = []
         contacts = []
+        stickers = []
         loadState = .idle
         contactsLoading = false
         contactsLoaded = false
+        stickersLoaded = false
+        stickersLoading = false
         isLoadingMoreChats = false
         historyLoading.removeAll()
         historyExhausted.removeAll()
@@ -335,6 +347,23 @@ final class ChatsViewModel: ObservableObject {
         change(&chats[i])
     }
 
+    private func message(_ id: UUID, in chatID: Int64) -> Message? {
+        chat(chatID)?.messages.first { $0.id == id }
+            ?? messageSearchResults[chatID]?.first { $0.id == id }
+    }
+
+    private func mutateMessage(_ id: UUID, in chatID: Int64, _ change: (inout Message) -> Void) {
+        if let chatIndex = chats.firstIndex(where: { $0.id == chatID }),
+           let messageIndex = chats[chatIndex].messages.firstIndex(where: { $0.id == id }) {
+            change(&chats[chatIndex].messages[messageIndex])
+            return
+        }
+        guard var results = messageSearchResults[chatID],
+              let index = results.firstIndex(where: { $0.id == id }) else { return }
+        change(&results[index])
+        messageSearchResults[chatID] = results
+    }
+
     func openChat(_ id: Int64) async {
         activeChatID = id
         let repo = repository
@@ -525,6 +554,100 @@ final class ChatsViewModel: ObservableObject {
         }
     }
 
+    func sendVideo(path: String, caption: String, to chatID: Int64) async throws {
+        do {
+            try await repository.sendVideo(chatID: chatID, path: path, caption: caption)
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func sendVideoNote(path: String, duration: Int, length: Int, to chatID: Int64) async throws {
+        do {
+            try await repository.sendVideoNote(chatID: chatID, path: path, duration: duration, length: length)
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func sendVoiceNote(path: String, duration: Int, to chatID: Int64) async throws {
+        do {
+            try await repository.sendVoiceNote(chatID: chatID, path: path, duration: duration)
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func sendPoll(question: String, options: [String], isAnonymous: Bool, allowsMultipleAnswers: Bool, to chatID: Int64) async throws {
+        do {
+            try await repository.sendPoll(
+                chatID: chatID,
+                question: question,
+                options: options,
+                isAnonymous: isAnonymous,
+                allowsMultipleAnswers: allowsMultipleAnswers
+            )
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func sendContact(firstName: String, lastName: String, phoneNumber: String, to chatID: Int64) async throws {
+        do {
+            try await repository.sendContact(
+                chatID: chatID,
+                firstName: firstName,
+                lastName: lastName,
+                phoneNumber: phoneNumber
+            )
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func sendLocation(latitude: Double, longitude: Double, to chatID: Int64) async throws {
+        do {
+            try await repository.sendLocation(chatID: chatID, latitude: latitude, longitude: longitude)
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func loadStickers() async {
+        guard isLive, !stickersLoaded, !stickersLoading else { return }
+        stickersLoading = true
+        defer { stickersLoading = false }
+        do {
+            stickers = try await repository.loadStickers()
+            stickersLoaded = !stickers.isEmpty
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+        }
+    }
+
+    func sendSticker(_ sticker: TelegramSticker, to chatID: Int64) async throws {
+        do {
+            try await repository.sendSticker(chatID: chatID, sticker: sticker)
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
     func sendDocument(path: String, caption: String, to chatID: Int64) async throws {
         do {
             try await repository.sendDocument(chatID: chatID, path: path, caption: caption)
@@ -664,18 +787,36 @@ final class ChatsViewModel: ObservableObject {
 
     // MARK: Sending
 
-    func send(_ text: String, in chatID: Int64, replyTo: UUID?) {
+    func send(_ text: String, in chatID: Int64, replyTo: UUID?, entityKind: MessageEntityKind? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let replyRemote = replyTo.flatMap { id in
-            chat(chatID)?.messages.first { $0.id == id }?.remoteID
+            message(id, in: chatID)?.remoteID
         }
-        let message = Message(text: trimmed, isOutgoing: true, state: .sending, replyToID: replyTo, replyToRemoteID: replyRemote)
+        let entities = entityKind.map {
+            [MessageEntity(offset: 0, length: (trimmed as NSString).length, kind: $0)]
+        } ?? []
+        let message = Message(
+            text: trimmed,
+            isOutgoing: true,
+            state: .sending,
+            replyToID: replyTo,
+            replyToRemoteID: replyRemote,
+            entities: entities
+        )
         mutateChat(chatID) { chat in
             chat.messages.append(message)
             chat.messages = Array(chat.messages.suffix(200))
         }
-        Task { await deliver(localID: message.id, text: trimmed, chatID: chatID, replyRemote: replyRemote) }
+        Task {
+            await deliver(
+                localID: message.id,
+                text: trimmed,
+                chatID: chatID,
+                replyRemote: replyRemote,
+                entities: entities
+            )
+        }
     }
 
     func retry(_ messageID: UUID, in chatID: Int64) {
@@ -683,12 +824,32 @@ final class ChatsViewModel: ObservableObject {
         setState(.sending, messageID: messageID, chatID: chatID)
         let text = message.text
         let reply = message.replyToRemoteID
-        Task { await deliver(localID: messageID, text: text, chatID: chatID, replyRemote: reply) }
+        let entities = message.entities
+        Task {
+            await deliver(
+                localID: messageID,
+                text: text,
+                chatID: chatID,
+                replyRemote: reply,
+                entities: entities
+            )
+        }
     }
 
-    private func deliver(localID: UUID, text: String, chatID: Int64, replyRemote: Int64?) async {
+    private func deliver(
+        localID: UUID,
+        text: String,
+        chatID: Int64,
+        replyRemote: Int64?,
+        entities: [MessageEntity]
+    ) async {
         do {
-            if let remote = try await repository.sendRemote(text: text, chatID: chatID, replyToRemoteID: replyRemote) {
+            if let remote = try await repository.sendRemote(
+                text: text,
+                chatID: chatID,
+                replyToRemoteID: replyRemote,
+                entities: entities
+            ) {
                 adopt(remote, for: localID, chatID: chatID)
             } else {
                 let state = try await repository.send(text: text, chatID: chatID)
@@ -725,25 +886,26 @@ final class ChatsViewModel: ObservableObject {
     func edit(_ messageID: UUID, in chatID: Int64, text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var remoteID: Int64?
-        mutateChat(chatID) { chat in
-            if let i = chat.messages.firstIndex(where: { $0.id == messageID }) {
-                chat.messages[i].text = trimmed
-                chat.messages[i].isEdited = true
-                remoteID = chat.messages[i].remoteID
-            }
+        guard let target = message(messageID, in: chatID) else { return }
+        mutateMessage(messageID, in: chatID) { message in
+            message.text = trimmed
+            message.isEdited = true
+            message.entities = []
         }
-        if let remoteID {
+        if let remoteID = target.remoteID {
             let repo = repository
             Task { try? await repo.editRemote(chatID: chatID, messageID: remoteID, text: trimmed) }
         }
     }
 
     func deleteMessage(_ messageID: UUID, in chatID: Int64) {
-        var remoteID: Int64?
-        mutateChat(chatID) { chat in
-            remoteID = chat.messages.first { $0.id == messageID }?.remoteID
-            chat.messages.removeAll { $0.id == messageID }
+        let remoteID = message(messageID, in: chatID)?.remoteID
+        if let chatIndex = chats.firstIndex(where: { $0.id == chatID }) {
+            chats[chatIndex].messages.removeAll { $0.id == messageID }
+        }
+        if var results = messageSearchResults[chatID] {
+            results.removeAll { $0.id == messageID }
+            messageSearchResults[chatID] = results
         }
         if let remoteID {
             let repo = repository
@@ -751,17 +913,168 @@ final class ChatsViewModel: ObservableObject {
         }
     }
 
-    /// Reactions are local-only in demo mode; hidden when connected (not yet sent to Telegram).
     func toggleReaction(_ emoji: String, on messageID: UUID, in chatID: Int64) {
-        guard !repository.isReal else { return }
-        mutateChat(chatID) { chat in
-            guard let i = chat.messages.firstIndex(where: { $0.id == messageID }) else { return }
-            if let r = chat.messages[i].reactions.firstIndex(of: emoji) {
-                chat.messages[i].reactions.remove(at: r)
+        guard let message = message(messageID, in: chatID) else { return }
+        if repository.isReal {
+            guard let remoteID = message.remoteID else { return }
+            let reaction = message.chosenReactions.contains(emoji) ? nil : emoji
+            let repo = repository
+            Task {
+                do {
+                    let reactions = try await repo.setMessageReaction(
+                        chatID: chatID,
+                        messageID: remoteID,
+                        emoji: reaction
+                    )
+                    guard let reactions else { return }
+                    mutateMessage(messageID, in: chatID) { message in
+                        message.reactions = reactions
+                        message.chosenReactions = reaction.map { [$0] } ?? []
+                    }
+                    mediaError = nil
+                } catch {
+                    mediaError = TGErrors.message(for: error)
+                }
+            }
+            return
+        }
+        mutateMessage(messageID, in: chatID) { message in
+            if let r = message.reactions.firstIndex(of: emoji) {
+                message.reactions.remove(at: r)
             } else {
-                chat.messages[i].reactions.append(emoji)
+                message.reactions.append(emoji)
             }
         }
+    }
+
+    func setMessagePinned(_ messageID: UUID, in chatID: Int64, pinned: Bool) {
+        guard let message = message(messageID, in: chatID) else { return }
+        guard repository.isReal, let remoteID = message.remoteID else {
+            mutateMessage(messageID, in: chatID) { message in
+                message.isPinned = pinned
+            }
+            return
+        }
+        let repo = repository
+        Task {
+            do {
+                try await repo.setMessagePinned(chatID: chatID, messageID: remoteID, pinned: pinned)
+                mutateMessage(messageID, in: chatID) { message in
+                    message.isPinned = pinned
+                }
+                mediaError = nil
+            } catch {
+                mediaError = TGErrors.message(for: error)
+            }
+        }
+    }
+
+    func votePoll(_ messageID: UUID, in chatID: Int64, optionIDs: [Int]) {
+        guard let message = message(messageID, in: chatID),
+              let remoteID = message.remoteID,
+              let poll = message.poll,
+              !poll.isClosed,
+              !optionIDs.isEmpty,
+              optionIDs.allSatisfy({ poll.options.indices.contains($0) }),
+              poll.allowsMultipleAnswers || optionIDs.count <= 1 else { return }
+        let repo = repository
+        Task {
+            do {
+                if let fresh = try await repo.votePoll(chatID: chatID, messageID: remoteID, optionIDs: optionIDs) {
+                    mutateMessage(messageID, in: chatID) { $0.poll = fresh.poll }
+                }
+                mediaError = nil
+            } catch {
+                mediaError = TGErrors.message(for: error)
+            }
+        }
+    }
+
+    func forwardMessages(_ messageIDs: [UUID], from sourceChatID: Int64, to destinationChatID: Int64) async {
+        let remoteIDs = messageIDs.compactMap { id in message(id, in: sourceChatID)?.remoteID }
+        guard !remoteIDs.isEmpty, remoteIDs.count == messageIDs.count else {
+            mediaError = L("chat.forward.unavailable")
+            return
+        }
+        do {
+            try await repository.forwardMessages(
+                fromChatID: sourceChatID,
+                toChatID: destinationChatID,
+                messageIDs: remoteIDs
+            )
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+        }
+    }
+
+    func searchMessages(in chatID: Int64, query: String, loadMore: Bool = false) async {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            messageSearchResults[chatID] = nil
+            messageSearchQueries[chatID] = nil
+            searchCursors[chatID] = nil
+            searchTokens[chatID] = nil
+            searchingChats.remove(chatID)
+            searchExhausted.remove(chatID)
+            return
+        }
+        if loadMore {
+            guard !searchingChats.contains(chatID), !searchExhausted.contains(chatID),
+                  messageSearchQueries[chatID] == trimmed else { return }
+        } else {
+            messageSearchQueries[chatID] = trimmed
+            messageSearchResults[chatID] = []
+            searchCursors[chatID] = nil
+            searchTokens[chatID] = nil
+            searchExhausted.remove(chatID)
+        }
+        let requestToken = UUID()
+        searchTokens[chatID] = requestToken
+        searchingChats.insert(chatID)
+        defer {
+            if searchTokens[chatID] == requestToken {
+                searchingChats.remove(chatID)
+                searchTokens[chatID] = nil
+            }
+        }
+
+        if !repository.isReal {
+            guard searchTokens[chatID] == requestToken else { return }
+            messageSearchResults[chatID] = (chat(chatID)?.messages ?? [])
+                .filter { $0.text.localizedCaseInsensitiveContains(trimmed) }
+            searchExhausted.insert(chatID)
+            return
+        }
+
+        let fromID = loadMore ? (searchCursors[chatID] ?? 0) : 0
+        do {
+            guard let page = try await repository.searchMessages(
+                chatID: chatID,
+                query: trimmed,
+                fromMessageID: fromID,
+                limit: 50
+            ), messageSearchQueries[chatID] == trimmed,
+                 searchTokens[chatID] == requestToken else { return }
+            let existingIDs = Set((messageSearchResults[chatID] ?? []).compactMap(\.remoteID))
+            let unique = page.filter { message in
+                guard let remoteID = message.remoteID else { return true }
+                return !existingIDs.contains(remoteID)
+            }
+            messageSearchResults[chatID, default: []].append(contentsOf: unique)
+            if let oldest = unique.compactMap(\.remoteID).min() { searchCursors[chatID] = oldest }
+            if page.count < 50 || unique.isEmpty { searchExhausted.insert(chatID) }
+            mediaError = nil
+        } catch {
+            guard searchTokens[chatID] == requestToken else { return }
+            mediaError = TGErrors.message(for: error)
+        }
+    }
+
+    func searchResults(in chatID: Int64, query: String) -> [Message]? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, messageSearchQueries[chatID] == trimmed else { return nil }
+        return messageSearchResults[chatID]
     }
 
     // MARK: Drafts (local only, capped)

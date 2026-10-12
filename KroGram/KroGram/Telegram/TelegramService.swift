@@ -614,6 +614,221 @@ actor TelegramService {
         ])
     }
 
+    func sendVideo(chatID: Int64, path: String, caption: String) async throws {
+        try validateOutgoingFile(path, limit: 25 * 1_024 * 1_024)
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessageVideo",
+                "video": ["@type": "inputFileLocal", "path": path] as JSON,
+                "thumbnail": NSNull(),
+                "added_sticker_file_ids": [],
+                "duration": 0,
+                "width": 0,
+                "height": 0,
+                "supports_streaming": true,
+                "caption": ["@type": "formattedText", "text": caption] as JSON,
+                "show_caption_above_media": false,
+                "self_destruct_type": NSNull(),
+                "has_spoiler": false
+            ] as JSON
+        ])
+    }
+
+    func sendVideoNote(chatID: Int64, path: String, duration: Int, length: Int) async throws {
+        try validateOutgoingFile(path, limit: 25 * 1_024 * 1_024)
+        guard (1...60).contains(duration) else {
+            throw TDError(code: -3, message: "INVALID_MEDIA_DURATION")
+        }
+        guard (1...640).contains(length) else {
+            throw TDError(code: -3, message: "INVALID_VIDEO_NOTE")
+        }
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessageVideoNote",
+                "video_note": [
+                    "@type": "inputVideoNote",
+                    "video_note": ["@type": "inputFileLocal", "path": path] as JSON,
+                    "thumbnail": NSNull(),
+                    "duration": duration,
+                    "length": length
+                ] as JSON,
+                "self_destruct_type": NSNull()
+            ] as JSON
+        ])
+    }
+
+    func sendVoiceNote(chatID: Int64, path: String, duration: Int) async throws {
+        try validateOutgoingFile(path, limit: 25 * 1_024 * 1_024)
+        guard (1...60).contains(duration) else {
+            throw TDError(code: -3, message: "INVALID_MEDIA_DURATION")
+        }
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessageVoiceNote",
+                "voice_note": [
+                    "@type": "inputVoiceNote",
+                    "voice_note": ["@type": "inputFileLocal", "path": path] as JSON,
+                    "duration": duration,
+                    "waveform": ""
+                ] as JSON,
+                "caption": ["@type": "formattedText", "text": ""] as JSON,
+                "self_destruct_type": NSNull()
+            ] as JSON
+        ])
+    }
+
+    func sendPoll(
+        chatID: Int64,
+        question: String,
+        options: [String],
+        isAnonymous: Bool,
+        allowsMultipleAnswers: Bool
+    ) async throws {
+        let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedOptions = options.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard !trimmedQuestion.isEmpty, (trimmedQuestion as NSString).length <= 300,
+              (2...10).contains(trimmedOptions.count),
+              trimmedOptions.allSatisfy({ !$0.isEmpty && ($0 as NSString).length <= 100 }) else {
+            throw TDError(code: -3, message: "INVALID_POLL")
+        }
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessagePoll",
+                "question": ["@type": "formattedText", "text": trimmedQuestion] as JSON,
+                "options": trimmedOptions.map {
+                    [
+                        "@type": "inputPollOption",
+                        "text": ["@type": "formattedText", "text": $0] as JSON,
+                        "media": NSNull()
+                    ] as JSON
+                },
+                "description": ["@type": "formattedText", "text": ""] as JSON,
+                "media": NSNull(),
+                "is_anonymous": isAnonymous,
+                "allows_multiple_answers": allowsMultipleAnswers,
+                "allows_revoting": false,
+                "members_only": false,
+                "country_codes": [],
+                "shuffle_options": false,
+                "hide_results_until_closes": false,
+                "type": ["@type": "pollTypeRegular"] as JSON,
+                "open_period": 0,
+                "close_date": 0,
+                "is_closed": false
+            ] as JSON
+        ])
+    }
+
+    func sendContact(chatID: Int64, firstName: String, lastName: String, phoneNumber: String) async throws {
+        let first = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let last = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let phone = phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !first.isEmpty, !phone.isEmpty else {
+            throw TDError(code: -3, message: "INVALID_CONTACT")
+        }
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessageContact",
+                "contact": [
+                    "@type": "contact",
+                    "phone_number": phone,
+                    "first_name": first,
+                    "last_name": last,
+                    "vcard": "",
+                    "user_id": 0
+                ] as JSON
+            ] as JSON
+        ])
+    }
+
+    func sendLocation(chatID: Int64, latitude: Double, longitude: Double) async throws {
+        guard latitude.isFinite, longitude.isFinite,
+              (-90...90).contains(latitude), (-180...180).contains(longitude) else {
+            throw TDError(code: -3, message: "INVALID_LOCATION")
+        }
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessageLocation",
+                "location": [
+                    "@type": "location",
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "horizontal_accuracy": 0
+                ] as JSON
+            ] as JSON
+        ])
+    }
+
+    func votePoll(chatID: Int64, messageID: Int64, optionIDs: [Int]) async throws -> Message {
+        guard !optionIDs.isEmpty, optionIDs.count <= 10,
+              optionIDs.allSatisfy({ (0..<10).contains($0) }),
+              Set(optionIDs).count == optionIDs.count else {
+            throw TDError(code: -3, message: "INVALID_POLL_ANSWER")
+        }
+        _ = try await call([
+            "@type": "setPollAnswer",
+            "chat_id": chatID,
+            "message_id": messageID,
+            "option_ids": optionIDs
+        ])
+        let message = try await call([
+            "@type": "getMessage",
+            "chat_id": chatID,
+            "message_id": messageID
+        ])
+        return TGParse.message(message, lastReadOutbox: lastReadOutbox[chatID] ?? 0)
+    }
+
+    func loadStickers() async throws -> [TelegramSticker] {
+        let sets = try await call([
+            "@type": "getInstalledStickerSets",
+            "sticker_type": ["@type": "stickerTypeRegular"] as JSON
+        ])
+        let setIDs = (sets["sticker_sets"] as? [JSON] ?? [])
+            .map { TGParse.int64($0["id"]) }
+            .filter { $0 != 0 }
+            .prefix(5)
+        var stickers: [TelegramSticker] = []
+        for setID in setIDs {
+            let set = try await call(["@type": "getStickerSet", "set_id": setID])
+            stickers.append(contentsOf: TGParse.stickers(set).prefix(24))
+        }
+        return stickers
+    }
+
+    func sendSticker(chatID: Int64, sticker: TelegramSticker) async throws {
+        guard sticker.id != 0, sticker.width > 0, sticker.height > 0 else {
+            throw TDError(code: -3, message: "INVALID_STICKER")
+        }
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessageSticker",
+                "sticker": [
+                    "@type": "inputSticker",
+                    "sticker": ["@type": "inputFileId", "id": sticker.id] as JSON,
+                    "thumbnail": NSNull(),
+                    "width": sticker.width,
+                    "height": sticker.height
+                ] as JSON,
+                "emoji": sticker.emoji
+            ] as JSON
+        ])
+    }
+
     private func validateOutgoingFile(_ path: String, limit: Int64) throws {
         let attributes = try FileManager.default.attributesOfItem(atPath: path)
         let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
@@ -640,10 +855,20 @@ actor TelegramService {
         activeDownloadIDs.removeAll()
     }
 
-    func sendText(chatID: Int64, text: String, replyToRemoteID: Int64?) async throws -> Message {
+    func sendText(
+        chatID: Int64,
+        text: String,
+        replyToRemoteID: Int64?,
+        entities: [MessageEntity] = []
+    ) async throws -> Message {
+        let formattedText: JSON = [
+            "@type": "formattedText",
+            "text": text,
+            "entities": entities.map(TGParse.entityJSON)
+        ]
         let content: JSON = [
             "@type": "inputMessageText",
-            "text": ["@type": "formattedText", "text": text] as JSON
+            "text": formattedText
         ]
         var query: JSON = ["@type": "sendMessage", "chat_id": chatID, "input_message_content": content]
         if let reply = replyToRemoteID, reply != 0 {
@@ -673,6 +898,86 @@ actor TelegramService {
             "message_ids": [messageID],
             "revoke": true
         ])
+    }
+
+    func setMessageReaction(chatID: Int64, messageID: Int64, emoji: String?) async throws -> [String] {
+        let reactionType: JSON
+        if let emoji {
+            reactionType = ["@type": "reactionTypeEmoji", "emoji": emoji]
+        } else {
+            reactionType = ["@type": "reactionTypeNone"]
+        }
+        _ = try await call([
+            "@type": "addMessageReaction",
+            "chat_id": chatID,
+            "message_id": messageID,
+            "reaction_type": reactionType,
+            "is_big": false,
+            "update_recent_reactions": false
+        ])
+        let message = try await call([
+            "@type": "getMessage",
+            "chat_id": chatID,
+            "message_id": messageID
+        ])
+        return TGParse.reactions(message)
+    }
+
+    func setMessagePinned(chatID: Int64, messageID: Int64, pinned: Bool) async throws {
+        if pinned {
+            _ = try await call([
+                "@type": "pinChatMessage",
+                "chat_id": chatID,
+                "message_id": messageID,
+                "disable_notification": false,
+                "only_for_self": false
+            ])
+        } else {
+            _ = try await call([
+                "@type": "unpinChatMessage",
+                "chat_id": chatID,
+                "message_id": messageID
+            ])
+        }
+    }
+
+    func forwardMessages(fromChatID: Int64, toChatID: Int64, messageIDs: [Int64]) async throws {
+        let orderedIDs = messageIDs.sorted()
+        guard !orderedIDs.isEmpty, orderedIDs.count <= 100,
+              Set(orderedIDs).count == orderedIDs.count else {
+            throw TDError(code: -3, message: "INVALID_FORWARD_SELECTION")
+        }
+        let result = try await call([
+            "@type": "forwardMessages",
+            "chat_id": toChatID,
+            "topic_id": NSNull(),
+            "from_chat_id": fromChatID,
+            "message_ids": orderedIDs,
+            "options": NSNull(),
+            "send_copy": false,
+            "remove_caption": false
+        ])
+        guard let messages = result["messages"] as? [Any],
+              messages.count == orderedIDs.count,
+              messages.allSatisfy({ !($0 is NSNull) }) else {
+            throw TDError(code: -3, message: "FORWARD_NOT_ALLOWED")
+        }
+    }
+
+    func searchMessages(chatID: Int64, query: String, fromMessageID: Int64, limit: Int) async throws -> [Message] {
+        let result = try await call([
+            "@type": "searchChatMessages",
+            "chat_id": chatID,
+            "topic_id": NSNull(),
+            "query": query,
+            "sender_id": NSNull(),
+            "from_message_id": fromMessageID,
+            "offset": 0,
+            "limit": limit.clamped(to: 1...100),
+            "filter": NSNull()
+        ])
+        return ((result["messages"] as? [JSON]) ?? [])
+            .map { TGParse.message($0, lastReadOutbox: lastReadOutbox[chatID] ?? 0) }
     }
 
     /// Sends a read receipt. Called only when the user opted in (or tapped "mark as read").

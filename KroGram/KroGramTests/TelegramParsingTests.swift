@@ -21,6 +21,69 @@ final class TelegramParsingTests: XCTestCase {
         XCTAssertFalse(message.isEdited)
     }
 
+    func testTextEntitiesAndMessageReactionsAreParsed() {
+        let message = TGParse.message([
+            "id": 3,
+            "date": 1_700_000_000,
+            "is_pinned": true,
+            "interaction_info": [
+                "reactions": [
+                    "reactions": [
+                        [
+                            "type": ["@type": "reactionTypeEmoji", "emoji": "🔥"],
+                            "total_count": 4,
+                            "is_chosen": true
+                        ],
+                        [
+                            "type": ["@type": "reactionTypeEmoji", "emoji": "❤️"],
+                            "total_count": 2,
+                            "is_chosen": false
+                        ]
+                    ]
+                ]
+            ],
+            "content": [
+                "@type": "messageText",
+                "text": [
+                    "@type": "formattedText",
+                    "text": "Hi 😀 bold",
+                    "entities": [
+                        [
+                            "offset": 6,
+                            "length": 4,
+                            "type": ["@type": "textEntityTypeBold"]
+                        ],
+                        [
+                            "offset": 0,
+                            "length": 2,
+                            "type": ["@type": "textEntityTypeTextUrl", "url": "https://example.com"]
+                        ]
+                    ]
+                ]
+            ]
+        ], lastReadOutbox: 0)
+
+        XCTAssertEqual(message.entities.count, 2)
+        XCTAssertEqual(message.entities[0], MessageEntity(offset: 6, length: 4, kind: .bold))
+        XCTAssertEqual(message.entities[1], MessageEntity(offset: 0, length: 2, kind: .textURL("https://example.com")))
+        XCTAssertEqual(message.reactions, ["🔥", "❤️"])
+        XCTAssertEqual(message.chosenReactions, ["🔥"])
+        XCTAssertTrue(message.isPinned)
+    }
+
+    func testTextEntitySerializesToTDLibShape() {
+        let encoded = TGParse.entityJSON(
+            MessageEntity(offset: 2, length: 4, kind: .textURL("https://example.com"))
+        )
+        let type = encoded["type"] as? JSON
+
+        XCTAssertEqual(encoded["@type"] as? String, "textEntity")
+        XCTAssertEqual((encoded["offset"] as? NSNumber)?.intValue, 2)
+        XCTAssertEqual((encoded["length"] as? NSNumber)?.intValue, 4)
+        XCTAssertEqual(type?["@type"] as? String, "textEntityTypeTextUrl")
+        XCTAssertEqual(type?["url"] as? String, "https://example.com")
+    }
+
     func testOutgoingReadStateFollowsLastReadOutbox() {
         let json: JSON = [
             "id": 100, "is_outgoing": true, "date": 1,
@@ -114,9 +177,90 @@ final class TelegramParsingTests: XCTestCase {
         XCTAssertEqual(document?.fileSize, 8_192)
     }
 
-    func testUnsupportedMessageContentIsFlagged() {
-        XCTAssertTrue(TGParse.isUnsupportedContent(["@type": "messagePoll"]))
+    func testCommonNonFileContentIsRenderedInsteadOfGenericUnsupportedCard() {
+        let poll: JSON = [
+            "@type": "messagePoll",
+            "poll": [
+                "question": ["text": "Choose"],
+                "options": [
+                    ["text": ["text": "First"]],
+                    ["text": ["text": "Second"]]
+                ]
+            ]
+        ]
+        let contact: JSON = [
+            "@type": "messageContact",
+            "contact": ["first_name": "Ada", "last_name": "Lovelace", "phone_number": "+10000000000"]
+        ]
+        let location: JSON = [
+            "@type": "messageLocation",
+            "location": ["latitude": 51.5, "longitude": -0.12]
+        ]
+
+        XCTAssertFalse(TGParse.isUnsupportedContent(poll))
+        XCTAssertEqual(TGParse.poll(poll)?.question, "Choose")
+        XCTAssertEqual(TGParse.poll(poll)?.options.map(\.text), ["First", "Second"])
+        XCTAssertFalse(TGParse.isUnsupportedContent(contact))
+        XCTAssertTrue(TGParse.contentText(contact).contains("Ada Lovelace"))
+        XCTAssertFalse(TGParse.isUnsupportedContent(location))
+        XCTAssertTrue(TGParse.contentText(location).contains("51.50000"))
+        XCTAssertTrue(TGParse.isUnsupportedContent(["@type": "messageUnknown"]))
         XCTAssertFalse(TGParse.isUnsupportedContent(["@type": "messageText"]))
+    }
+
+    func testPollParsingPreservesVotingOptionsAndResultState() {
+        let poll = TGParse.poll([
+            "@type": "messagePoll",
+            "poll": [
+                "question": ["text": "Choose one"],
+                "options": [
+                    [
+                        "text": ["text": "First"],
+                        "voter_count": 3,
+                        "vote_percentage": 75,
+                        "is_chosen": true
+                    ],
+                    [
+                        "text": ["text": "Second"],
+                        "voter_count": 1,
+                        "vote_percentage": 25,
+                        "is_chosen": false
+                    ]
+                ],
+                "total_voter_count": 4,
+                "allows_multiple_answers": false,
+                "is_closed": false
+            ]
+        ])
+
+        XCTAssertEqual(poll?.question, "Choose one")
+        XCTAssertEqual(poll?.options.map(\.text), ["First", "Second"])
+        XCTAssertEqual(poll?.options.map(\.votePercentage), [75, 25])
+        XCTAssertEqual(poll?.options.map(\.isChosen), [true, false])
+        XCTAssertEqual(poll?.totalVoterCount, 4)
+        XCTAssertFalse(poll?.allowsMultipleAnswers ?? true)
+        XCTAssertFalse(poll?.isClosed ?? true)
+    }
+
+    func testInstalledStickerParsingKeepsFileAndDisplayMetadata() {
+        let stickers = TGParse.stickers([
+            "stickers": [
+                [
+                    "sticker": ["id": 712],
+                    "emoji": "✨",
+                    "width": 512,
+                    "height": 512
+                ],
+                [
+                    "sticker": ["id": 0],
+                    "emoji": "❌",
+                    "width": 512,
+                    "height": 512
+                ]
+            ]
+        ])
+
+        XCTAssertEqual(stickers, [TelegramSticker(id: 712, emoji: "✨", width: 512, height: 512)])
     }
 
     func testChatPhotoFileIDIsParsed() {

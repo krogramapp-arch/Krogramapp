@@ -1,22 +1,58 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import AVFoundation
 
 // MARK: - Link detection
 
-func linkified(_ text: String) -> AttributedString {
+func linkified(_ text: String, entities: [MessageEntity] = [], revealSpoilers: Bool = false) -> AttributedString {
     var result = AttributedString(text)
-    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
-        return result
+    if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+        let nsText = text as NSString
+        let matches = detector.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        for match in matches {
+            guard let url = match.url,
+                  let stringRange = Range(match.range, in: text),
+                  let attributedRange = Range(stringRange, in: result) else { continue }
+            result[attributedRange].link = url
+            result[attributedRange].underlineStyle = .single
+        }
     }
-    let nsText = text as NSString
-    let matches = detector.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-    for match in matches {
-        guard let url = match.url,
-              let stringRange = Range(match.range, in: text),
-              let attributedRange = Range(stringRange, in: result) else { continue }
-        result[attributedRange].link = url
-        result[attributedRange].underlineStyle = .single
+
+    let utf16Count = (text as NSString).length
+    for entity in entities where entity.offset <= utf16Count && entity.length <= utf16Count - entity.offset {
+        let nsRange = NSRange(location: entity.offset, length: entity.length)
+        guard let textRange = Range(nsRange, in: text),
+              let range = Range(textRange, in: result) else { continue }
+        switch entity.kind {
+        case .bold:
+            result[range].inlinePresentationIntent = .stronglyEmphasized
+        case .italic:
+            result[range].inlinePresentationIntent = .emphasized
+        case .code, .pre:
+            result[range].inlinePresentationIntent = .code
+        case .quote:
+            result[range].inlinePresentationIntent = .emphasized
+        case .spoiler:
+            if !revealSpoilers {
+                result[range].foregroundColor = .primary
+                result[range].backgroundColor = .primary
+            }
+        case .underline:
+            result[range].underlineStyle = .single
+        case .strikethrough:
+            result[range].strikethroughStyle = .single
+        case .textURL(let value):
+            result[range].link = URL(string: value)
+        case .url:
+            if result[range].link == nil { result[range].link = URL(string: String(text[textRange])) }
+        case .email:
+            result[range].link = URL(string: "mailto:\(text[textRange])")
+        case .phoneNumber:
+            result[range].link = URL(string: "tel:\(text[textRange])")
+        case .mention, .mentionName(_), .hashtag, .cashtag, .botCommand:
+            break
+        }
     }
     return result
 }
@@ -27,7 +63,10 @@ struct MessageBubble: View {
     let message: Message
     let replied: Message?
     let onRetry: () -> Void
+    let onVotePoll: ([Int]) -> Void
     @EnvironmentObject private var themes: ThemeStore
+    @State private var revealSpoilers = false
+    @State private var selectedPollOptions = Set<Int>()
 
     var body: some View {
         let theme = themes.current
@@ -48,13 +87,21 @@ struct MessageBubble: View {
                 if message.isUnsupportedContent {
                     Label("msg.unsupported", systemImage: "exclamationmark.bubble")
                         .font(.footnote)
+                } else if let poll = message.poll {
+                    pollContent(poll)
                 } else if let media = message.media {
                     MediaMessageView(media: media)
                     if !media.caption.isEmpty {
-                        Text(linkified(media.caption)).kro(.body).tint(foreground)
+                        spoilerRevealButton(for: media.captionEntities)
+                        Text(linkified(media.caption, entities: media.captionEntities, revealSpoilers: revealSpoilers))
+                            .kro(.body)
+                            .tint(foreground)
                     }
                 } else {
-                    Text(linkified(message.text)).kro(.body).tint(foreground)
+                    spoilerRevealButton(for: message.entities)
+                    Text(linkified(message.text, entities: message.entities, revealSpoilers: revealSpoilers))
+                        .kro(.body)
+                        .tint(foreground)
                 }
                 footer(foreground)
                 if !message.reactions.isEmpty {
@@ -77,6 +124,67 @@ struct MessageBubble: View {
             if !message.isOutgoing { Spacer(minLength: 48) }
         }
         .onTapGesture { if message.state == .failed { onRetry() } }
+    }
+
+    private func pollContent(_ poll: MessagePoll) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(poll.question).font(.body.weight(.semibold))
+            ForEach(poll.options.indices, id: \.self) { index in
+                let option = poll.options[index]
+                let showsResults = poll.totalVoterCount > 0
+                Button {
+                    guard !poll.isClosed, !poll.options.contains(where: \.isChosen) else { return }
+                    if poll.allowsMultipleAnswers {
+                        if selectedPollOptions.contains(index) {
+                            selectedPollOptions.remove(index)
+                        } else {
+                            selectedPollOptions.insert(index)
+                        }
+                    } else {
+                        selectedPollOptions = [index]
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: option.isChosen || selectedPollOptions.contains(index)
+                              ? "largecircle.fill.circle" : "circle")
+                        Text(option.text)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 4)
+                        if showsResults {
+                            Text("\(option.votePercentage)%")
+                                .font(.caption.monospacedDigit())
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(poll.isClosed || poll.options.contains(where: \.isChosen))
+                if showsResults {
+                    ProgressView(value: Double(option.votePercentage), total: 100)
+                        .tint(themes.current.accent)
+                        .accessibilityLabel(Text("poll.result"))
+                        .accessibilityValue("\(option.votePercentage)%")
+                }
+            }
+            if !poll.isClosed, !poll.options.contains(where: \.isChosen) {
+                Button("poll.vote") { onVotePoll(selectedPollOptions.sorted()) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selectedPollOptions.isEmpty)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text(String(format: L("poll.voterCount"), poll.totalVoterCount))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func spoilerRevealButton(for entities: [MessageEntity]) -> some View {
+        if entities.contains(where: { $0.kind == .spoiler }), !revealSpoilers {
+            Button("msg.revealSpoilers") { revealSpoilers = true }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.plain)
+        }
     }
 
     private func footer(_ foreground: Color) -> some View {
@@ -127,8 +235,18 @@ struct ChatView: View {
     @State private var isSearching = false
     @State private var commanderResponse: String?
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var selectedVideoNote: PhotosPickerItem?
     @State private var showFileImporter = false
     @State private var showChatProfile = false
+    @State private var showingPollComposer = false
+    @State private var showingContactPicker = false
+    @State private var showingLocationShare = false
+    @State private var showingStickerPicker = false
+    @StateObject private var voiceRecorder = VoiceMessageRecorder()
+    @State private var composerEntityKind: MessageEntityKind?
+    @State private var selectingMessages = false
+    @State private var selectedMessageIDs = Set<UUID>()
+    @State private var showingForwardPicker = false
 
     private static let reactions = ["👍", "❤️", "😂", "🔥"]
 
@@ -142,7 +260,13 @@ struct ChatView: View {
 
     private func content(_ chat: Chat) -> some View {
         let theme = themes.current
-        let shown = query.isEmpty ? chat.messages : chat.messages.filter { $0.text.localizedCaseInsensitiveContains(query) }
+        let shown: [Message]
+        if query.isEmpty {
+            shown = chat.messages
+        } else {
+            shown = vm.searchResults(in: chatID, query: query)
+                ?? chat.messages.filter { $0.text.localizedCaseInsensitiveContains(query) }
+        }
         return VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -168,6 +292,11 @@ struct ChatView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear { scrollToEnd(proxy, chat) }
                 .onChange(of: chat.messages.last?.id) { _, _ in scrollToEnd(proxy, chat) }
+                .overlay {
+                    if !query.isEmpty, vm.searchingChats.contains(chatID), shown.isEmpty {
+                        ProgressView()
+                    }
+                }
             }
             if let commanderResponse {
                 commanderResult(commanderResponse)
@@ -213,22 +342,120 @@ struct ChatView: View {
                     }
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                if selectingMessages && !selectedMessageIDs.isEmpty && vm.isLive {
+                    Button {
+                        showingForwardPicker = true
+                    } label: {
+                        Label("action.forward", systemImage: "arrowshape.turn.up.right")
+                    }
+                } else {
+                    Button(selectingMessages ? "action.done" : "action.selectMessages") {
+                        selectingMessages.toggle()
+                        selectedMessageIDs.removeAll()
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingForwardPicker) {
+            NavigationStack {
+                List(vm.mainChats.filter { $0.id != chatID }) { destination in
+                    Button {
+                        let ids = selectedMessageIDs.sorted { left, right in
+                            let messages = vm.chat(chatID)?.messages ?? []
+                            return (messages.first { $0.id == left }?.remoteID ?? 0)
+                                < (messages.first { $0.id == right }?.remoteID ?? 0)
+                        }
+                        Task {
+                            await vm.forwardMessages(ids, from: chatID, to: destination.id)
+                            showingForwardPicker = false
+                            selectingMessages = false
+                            selectedMessageIDs.removeAll()
+                        }
+                    } label: {
+                        Text(destination.title)
+                    }
+                }
+                .navigationTitle("chat.forward.title")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("action.cancel") { showingForwardPicker = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingPollComposer) {
+            PollComposerView { question, options, isAnonymous, allowsMultipleAnswers in
+                try await vm.sendPoll(
+                    question: question,
+                    options: options,
+                    isAnonymous: isAnonymous,
+                    allowsMultipleAnswers: allowsMultipleAnswers,
+                    to: chatID
+                )
+            }
+        }
+        .sheet(isPresented: $showingContactPicker) {
+            SystemContactPicker { selection in
+                showingContactPicker = false
+                guard let selection else { return }
+                Task {
+                    do {
+                        try await vm.sendContact(
+                            firstName: selection.firstName,
+                            lastName: selection.lastName,
+                            phoneNumber: selection.phoneNumber,
+                            to: chatID
+                        )
+                    } catch {
+                        vm.setMediaError(TGErrors.message(for: error))
+                    }
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .sheet(isPresented: $showingLocationShare) {
+            LocationShareView { latitude, longitude in
+                try await vm.sendLocation(latitude: latitude, longitude: longitude, to: chatID)
+            }
+        }
+        .sheet(isPresented: $showingStickerPicker) {
+            StickerPickerView { sticker in
+                try await vm.sendSticker(sticker, to: chatID)
+            }
         }
         .onAppear { text = vm.draft(for: chatID) }
         .task { await vm.openChat(chatID) }
+        .task(id: query) {
+            do {
+                try await Task.sleep(for: .milliseconds(300))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await vm.searchMessages(in: chatID, query: query)
+        }
         .onDisappear {
             vm.setDraft(text, for: chatID)
+            voiceRecorder.cancel()
             if !showChatProfile { vm.closeChat(chatID) }
         }
         .onChange(of: text) { _, newValue in
             if !newValue.isEmpty { vm.userTyped(chatID) }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { vm.setDraft(text, for: chatID) }
+            if phase != .active {
+                vm.setDraft(text, for: chatID)
+                voiceRecorder.cancel()
+            }
         }
         .onChange(of: selectedPhoto) { _, photo in
             guard let photo else { return }
             Task { await sendPickedPhoto(photo) }
+        }
+        .onChange(of: selectedVideoNote) { _, video in
+            guard let video else { return }
+            Task { await sendPickedVideoNote(video) }
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -245,23 +472,68 @@ struct ChatView: View {
             if let remote = message.replyToRemoteID, candidate.remoteID == remote { return true }
             return false
         }
-        return MessageBubble(message: message, replied: replied) {
-            vm.retry(message.id, in: chatID)
+        return MessageBubble(
+            message: message,
+            replied: replied,
+            onRetry: { vm.retry(message.id, in: chatID) },
+            onVotePoll: { optionIDs in vm.votePoll(message.id, in: chatID, optionIDs: optionIDs) }
+        )
+        .overlay(alignment: .topLeading) {
+            if selectingMessages && selectedMessageIDs.contains(message.id) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(themes.current.accent)
+                    .background(.background, in: Circle())
+                    .padding(3)
+            }
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded {
+            guard selectingMessages else { return }
+            if selectedMessageIDs.contains(message.id) {
+                selectedMessageIDs.remove(message.id)
+            } else if selectedMessageIDs.count < 100 {
+                selectedMessageIDs.insert(message.id)
+            } else {
+                vm.setMediaError(L("chat.forward.limit"))
+            }
+        })
         .contextMenu {
+            if !selectingMessages {
+                Button {
+                    selectingMessages = true
+                    selectedMessageIDs = [message.id]
+                } label: {
+                    Label("action.selectMessages", systemImage: "checkmark.circle")
+                }
+            }
             Button { replyTo = message; editing = nil } label: {
                 Label("action.reply", systemImage: "arrowshape.turn.up.left")
             }
             Button { UIPasteboard.general.string = message.text } label: {
                 Label("action.copy", systemImage: "doc.on.doc")
             }
-            if !vm.isLive {
-                Menu {
-                    ForEach(Self.reactions, id: \.self) { emoji in
-                        Button(emoji) { vm.toggleReaction(emoji, on: message.id, in: chatID) }
-                    }
+            Menu {
+                ForEach(Self.reactions, id: \.self) { emoji in
+                    Button(emoji) { vm.toggleReaction(emoji, on: message.id, in: chatID) }
+                }
+            } label: {
+                Label("chat.react", systemImage: "face.smiling")
+            }
+            if vm.isLive, message.remoteID != nil {
+                Button {
+                    vm.setMessagePinned(message.id, in: chatID, pinned: !message.isPinned)
                 } label: {
-                    Label("chat.react", systemImage: "face.smiling")
+                    Label(
+                        message.isPinned ? "action.unpinMessage" : "action.pinMessage",
+                        systemImage: message.isPinned ? "pin.slash" : "pin"
+                    )
+                }
+                Button {
+                    selectingMessages = true
+                    selectedMessageIDs = [message.id]
+                    showingForwardPicker = true
+                } label: {
+                    Label("action.forward", systemImage: "arrowshape.turn.up.right")
                 }
             }
             if message.isOutgoing {
@@ -269,6 +541,7 @@ struct ChatView: View {
                     editing = message
                     replyTo = nil
                     text = message.text
+                    composerEntityKind = nil
                 } label: { Label("action.edit", systemImage: "pencil") }
                 Button(role: .destructive) {
                     vm.deleteMessage(message.id, in: chatID)
@@ -294,6 +567,7 @@ struct ChatView: View {
                         if editing != nil { text = "" }
                         replyTo = nil
                         editing = nil
+                        composerEntityKind = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                     }
@@ -304,14 +578,62 @@ struct ChatView: View {
             }
             HStack(alignment: .bottom, spacing: KroSpacing.sm) {
                 Menu {
+                    Button("format.bold") { composerEntityKind = .bold }
+                    Button("format.italic") { composerEntityKind = .italic }
+                    Button("format.code") { composerEntityKind = .code }
+                    Button("format.quote") { composerEntityKind = .quote }
+                    Button("format.spoiler") { composerEntityKind = .spoiler }
+                    Button("format.none") { composerEntityKind = nil }
+                } label: {
+                    Image(systemName: "textformat")
+                        .font(.title3)
+                        .foregroundStyle(composerEntityKind == nil ? Color.secondary : themes.current.accent)
+                }
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || editing != nil)
+                .accessibilityLabel(Text("format.title"))
+                Menu {
                     if vm.isLive {
                         PhotosPicker(selection: $selectedPhoto, matching: .images) {
                             Label("chat.attach.photo", systemImage: "photo")
+                        }
+                        PhotosPicker(selection: $selectedVideoNote, matching: .videos) {
+                            Label("chat.attach.videoNote", systemImage: "video.circle")
                         }
                         Button {
                             showFileImporter = true
                         } label: {
                             Label("chat.attach.file", systemImage: "doc")
+                        }
+                        Button {
+                            showingPollComposer = true
+                        } label: {
+                            Label("poll.create", systemImage: "chart.bar")
+                        }
+                        Button {
+                            showingContactPicker = true
+                        } label: {
+                            Label("chat.attach.contact", systemImage: "person.crop.circle")
+                        }
+                        Button {
+                            showingLocationShare = true
+                        } label: {
+                            Label("chat.attach.location", systemImage: "location")
+                        }
+                        Button {
+                            showingStickerPicker = true
+                        } label: {
+                            Label("sticker.title", systemImage: "face.smiling")
+                        }
+                        Button {
+                            Task {
+                                do {
+                                    try await voiceRecorder.start()
+                                } catch {
+                                    vm.setMediaError(TGErrors.message(for: error))
+                                }
+                            }
+                        } label: {
+                            Label("chat.attach.voice", systemImage: "mic")
                         }
                     } else {
                         Text("media.realOnly")
@@ -320,17 +642,26 @@ struct ChatView: View {
                     Image(systemName: "plus.circle.fill").font(.title2)
                 }
                 .accessibilityLabel(Text("chat.attach.photo"))
-                TextField("chat.message.placeholder", text: $text, axis: .vertical)
-                    .lineLimit(1...5)
-                    .kro(.body)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .glass(cornerRadius: KroRadius.field)
-                Button(action: submit) {
-                    Image(systemName: editing == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill")
+                if voiceRecorder.isRecording {
+                    Text("chat.voiceRecording")
+                        .kro(.body)
+                        .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                        .accessibilityLiveRegion(.assertive)
+                } else {
+                    TextField("chat.message.placeholder", text: $text, axis: .vertical)
+                        .lineLimit(1...5)
+                        .kro(.body)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .glass(cornerRadius: KroRadius.field)
+                }
+                Button(action: voiceRecorder.isRecording ? finishVoiceRecording : submit) {
+                    Image(systemName: voiceRecorder.isRecording
+                          ? "stop.circle.fill"
+                          : (editing == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill"))
                         .font(.title)
                 }
-                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!voiceRecorder.isRecording && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(.horizontal, KroSpacing.md)
             .padding(.vertical, KroSpacing.sm)
@@ -421,14 +752,16 @@ struct ChatView: View {
                     commanderResponse = L(archived ? "commander.result.archived" : "commander.result.unarchived")
                 }
                 text = ""
+                composerEntityKind = nil
                 vm.setDraft("", for: chatID)
                 Haptics.success()
                 return
             }
-            vm.send(text, in: chatID, replyTo: replyTo?.id)
+            vm.send(text, in: chatID, replyTo: replyTo?.id, entityKind: composerEntityKind)
             replyTo = nil
         }
         text = ""
+        composerEntityKind = nil
         vm.setDraft("", for: chatID)
     }
 
@@ -454,6 +787,62 @@ struct ChatView: View {
     }
 
     @MainActor
+    private func sendPickedVideoNote(_ item: PhotosPickerItem) async {
+        defer { selectedVideoNote = nil }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                throw TDError(code: -3, message: "MEDIA_READ_FAILED")
+            }
+            guard data.count > 0, data.count <= 25 * 1_024 * 1_024 else {
+                throw TDError(code: -3, message: "FILE_TOO_LARGE")
+            }
+            let videoType = item.supportedContentTypes.first { $0.conforms(to: .movie) }
+            let preferredExtension = videoType?.preferredFilenameExtension?.lowercased()
+            let supportedExtensions = ["mov", "mp4", "m4v"]
+            let ext = preferredExtension.flatMap { supportedExtensions.contains($0) ? $0 : nil } ?? "mov"
+            let url = try storeOutgoingFile(data, fileExtension: ext)
+            let asset = AVURLAsset(url: url)
+            let duration = CMTimeGetSeconds(try await asset.load(.duration))
+            guard duration.isFinite, duration > 0, duration <= 60 else {
+                throw TDError(code: -3, message: "INVALID_MEDIA_DURATION")
+            }
+            let tracks = try await asset.load(.tracks)
+            guard let videoTrack = tracks.first(where: { $0.mediaType == .video }) else {
+                throw TDError(code: -3, message: "MEDIA_READ_FAILED")
+            }
+            let naturalSize = try await videoTrack.load(.naturalSize)
+            let length = Int(min(abs(naturalSize.width), abs(naturalSize.height)))
+            guard length > 0 else { throw TDError(code: -3, message: "MEDIA_READ_FAILED") }
+            try await vm.sendVideoNote(
+                path: url.path,
+                duration: Int(duration.rounded(.up)),
+                length: length,
+                to: chatID
+            )
+        } catch {
+            vm.setMediaError(TGErrors.message(for: error))
+        }
+    }
+
+    private func finishVoiceRecording() {
+        do {
+            let recording = try voiceRecorder.finish()
+            let data = try Data(contentsOf: recording.url, options: .mappedIfSafe)
+            let url = try storeOutgoingFile(data, fileExtension: "m4a")
+            try FileManager.default.removeItem(at: recording.url)
+            Task {
+                do {
+                    try await vm.sendVoiceNote(path: url.path, duration: recording.duration, to: chatID)
+                } catch {
+                    vm.setMediaError(TGErrors.message(for: error))
+                }
+            }
+        } catch {
+            vm.setMediaError(TGErrors.message(for: error))
+        }
+    }
+
+    @MainActor
     private func importSelectedFile(_ result: Result<[URL], Error>) async {
         do {
             guard let source = try result.get().first else { return }
@@ -467,7 +856,11 @@ struct ChatView: View {
             }
             let data = try Data(contentsOf: source, options: .mappedIfSafe)
             let url = try storeOutgoingFile(data, fileExtension: source.pathExtension)
-            try await vm.sendDocument(path: url.path, caption: text, to: chatID)
+            if UTType(filenameExtension: source.pathExtension)?.conforms(to: .movie) == true {
+                try await vm.sendVideo(path: url.path, caption: text, to: chatID)
+            } else {
+                try await vm.sendDocument(path: url.path, caption: text, to: chatID)
+            }
             text = ""
         } catch {
             vm.setMediaError(TGErrors.message(for: error))
@@ -503,10 +896,15 @@ struct ChatView: View {
             proxy.scrollTo(last.id, anchor: .bottom)
         }
 
-        private func loadOlderIfAtTop(_ message: Message, chat: Chat) {
-            guard query.isEmpty,
-                  message.id == chat.messages.first(where: { $0.remoteID != nil })?.id else { return }
+    }
+
+    private func loadOlderIfAtTop(_ message: Message, chat: Chat) {
+        if query.isEmpty {
+            guard message.id == chat.messages.first(where: { $0.remoteID != nil })?.id else { return }
             Task { await vm.loadOlderHistory(chatID: chatID) }
+        } else {
+            guard vm.searchResults(in: chatID, query: query)?.last?.id == message.id else { return }
+            Task { await vm.searchMessages(in: chatID, query: query, loadMore: true) }
         }
     }
 }

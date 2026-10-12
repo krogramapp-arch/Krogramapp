@@ -1,6 +1,31 @@
 import XCTest
 @testable import KroGram
 
+private struct SearchPagingRepository: ChatRepository {
+    var isReal: Bool { true }
+
+    func loadChats() async throws -> [Chat] { [] }
+    func loadFolders() async throws -> [ChatFolder] { [] }
+    func loadContacts() async throws -> [Contact] { [] }
+    func send(text: String, chatID: Int64) async throws -> DeliveryState { .sent }
+
+    func searchMessages(chatID: Int64, query: String, fromMessageID: Int64, limit: Int) async throws -> [Message]? {
+        XCTAssertEqual(query, "needle")
+        XCTAssertEqual(limit, 50)
+        if fromMessageID == 0 {
+            return [
+                Message(text: "needle new", isOutgoing: false, remoteID: 30),
+                Message(text: "needle middle", isOutgoing: false, remoteID: 20)
+            ]
+        }
+        XCTAssertEqual(fromMessageID, 20)
+        return [
+            Message(text: "needle middle", isOutgoing: false, remoteID: 20),
+            Message(text: "needle old", isOutgoing: false, remoteID: 10)
+        ]
+    }
+}
+
 @MainActor
 final class ChatsViewModelTests: XCTestCase {
     private func makeVM() async -> ChatsViewModel {
@@ -33,6 +58,17 @@ final class ChatsViewModelTests: XCTestCase {
         XCTAssertEqual(vm.visibleChats.map(\.id), [2])
         vm.searchText = "المراجعة"
         XCTAssertEqual(vm.visibleChats.map(\.id), [1])
+    }
+
+    func testMessageSearchLoadsOlderPagesWithoutDuplicates() async {
+        let vm = ChatsViewModel(repository: SearchPagingRepository(), defaults: makeDefaults())
+
+        await vm.searchMessages(in: 1, query: "needle")
+        XCTAssertEqual(vm.searchResults(in: 1, query: "needle")?.compactMap(\.remoteID), [30, 20])
+        XCTAssertEqual(vm.searchResults(in: 1, query: " needle ")?.compactMap(\.remoteID), [30, 20])
+
+        await vm.searchMessages(in: 1, query: "needle", loadMore: true)
+        XCTAssertEqual(vm.searchResults(in: 1, query: "needle")?.compactMap(\.remoteID), [30, 20, 10])
     }
 
     func testUnreadFilter() async {
