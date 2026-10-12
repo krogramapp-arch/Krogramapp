@@ -2,6 +2,7 @@ import Foundation
 
 enum AuthStep: Sendable, Equatable {
     case starting
+    case databaseReady
     case waitPhone
     case waitCode
     case waitPassword(hint: String)
@@ -29,6 +30,14 @@ actor TelegramService {
     private var privacy = PrivacySnapshot()
     private var userCache: [Int64: TGUser] = [:]
     private var lastReadOutbox: [Int64: Int64] = [:]
+    private var loadedChatIDs: [String: [Int64]] = [:]
+    private var knownFileIDs: Set<Int64> = []
+    private var cachedDownloadedSizes: [Int64: Int64] = [:]
+    private var downloadedFileOrder: [Int64] = []
+    private var activeDownloadIDs: Set<Int64> = []
+    private let chatPageSize = 25
+    private let historyPageSize = 50
+    private let mediaCacheLimit: Int64 = 100 * 1_024 * 1_024
 
     init(credentials: TelegramCredentials, dbKey: Data) {
         self.credentials = credentials
@@ -56,8 +65,8 @@ actor TelegramService {
         }
     }
 
-    func logOut() async {
-        _ = try? await call(["@type": "logOut"])
+    func logOut() async throws {
+        _ = try await call(["@type": "logOut"])
     }
 
     // MARK: Authorization
@@ -75,7 +84,13 @@ actor TelegramService {
     }
 
     private func sendParameters() async {
-        let directory = Self.databaseDirectory()
+        let directory: String
+        do {
+            directory = try Self.databaseDirectory()
+        } catch {
+            authOut.yield(.failed(TGErrors.message(for: error)))
+            return
+        }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
         let query: JSON = [
             "@type": "setTdlibParameters",
@@ -96,6 +111,7 @@ actor TelegramService {
         ]
         do {
             _ = try await call(query)
+            authOut.yield(.databaseReady)
         } catch {
             authOut.yield(.failed(TGErrors.message(for: error)))
         }
@@ -162,10 +178,9 @@ actor TelegramService {
         case "updateNewMessage":
             if let message = update["message"] as? JSON {
                 let chatID = TGParse.int64(message["chat_id"])
-                eventOut.yield(.newMessage(
-                    chatID: chatID,
-                    message: TGParse.message(message, lastReadOutbox: lastReadOutbox[chatID] ?? 0)
-                ))
+                let parsed = TGParse.message(message, lastReadOutbox: lastReadOutbox[chatID] ?? 0)
+                registerFiles(in: [parsed])
+                eventOut.yield(.newMessage(chatID: chatID, message: parsed))
             }
 
         case "updateMessageContent":
@@ -212,6 +227,21 @@ actor TelegramService {
             }
             eventOut.yield(.userStatus(userID: userID, isOnline: online))
 
+        case "updateFile":
+            guard let file = update["file"] as? JSON else { break }
+            let id = TGParse.int64(file["id"])
+            knownFileIDs.insert(id)
+            let local = file["local"] as? JSON ?? [:]
+            if (local["is_downloading_completed"] as? Bool) == true {
+                recordCachedFile(id, size: TGParse.int64(local["downloaded_size"]))
+            }
+            eventOut.yield(.fileProgress(
+                fileID: id,
+                downloaded: TGParse.int64(local["downloaded_size"]),
+                total: TGParse.int64(file["size"]),
+                completed: (local["is_downloading_completed"] as? Bool) == true
+            ))
+
         default:
             break
         }
@@ -219,19 +249,58 @@ actor TelegramService {
 
     // MARK: Chats
 
-    func loadChats(limit: Int = 100) async throws -> [Chat] {
-        var ids: [Int64] = []
+    func loadChats(limit: Int = 25) async throws -> [Chat] {
+        try await loadChatPage(limit: min(max(limit, 1), chatPageSize), loadMore: false)
+    }
+
+    func loadMoreChats() async throws -> [Chat] {
+        try await loadChatPage(limit: chatPageSize, loadMore: true)
+    }
+
+    private func loadChatPage(limit: Int, loadMore: Bool) async throws -> [Chat] {
+        var pageIDs: [Int64] = []
+        let perListLimit = (limit + 1) / 2
         for list in ["chatListMain", "chatListArchive"] {
             let listObject: JSON = ["@type": list]
-            _ = try? await call(["@type": "loadChats", "chat_list": listObject, "limit": limit])
-            if let result = try? await call(["@type": "getChats", "chat_list": listObject, "limit": limit]) {
-                let found = ((result["chat_ids"] as? [NSNumber]) ?? []).map(\.int64Value)
-                for id in found where !ids.contains(id) { ids.append(id) }
+            let previouslyLoaded = loadedChatIDs[list] ?? []
+            let desiredCount = loadMore
+                ? previouslyLoaded.count + perListLimit
+                : max(previouslyLoaded.count, perListLimit)
+            var result = try await call([
+                "@type": "getChats",
+                "chat_list": listObject,
+                "limit": desiredCount
+            ])
+            var found = ((result["chat_ids"] as? [NSNumber]) ?? []).map(\.int64Value)
+            if found.count < desiredCount, authReady {
+                do {
+                    _ = try await call([
+                        "@type": "loadChats",
+                        "chat_list": listObject,
+                        "limit": perListLimit
+                    ])
+                    result = try await call([
+                        "@type": "getChats",
+                        "chat_list": listObject,
+                        "limit": desiredCount
+                    ])
+                    found = ((result["chat_ids"] as? [NSNumber]) ?? []).map(\.int64Value)
+                } catch {
+                    if found.isEmpty { throw error }
+                }
             }
+            loadedChatIDs[list] = found
+            let eligible = loadMore ? found.filter { !previouslyLoaded.contains($0) } : Array(found.prefix(limit))
+            pageIDs.append(contentsOf: eligible)
         }
+
         var chats: [Chat] = []
-        for id in ids {
-            if let fetched = try? await self.chat(id) { chats.append(fetched) }
+        for id in pageIDs where !chats.contains(where: { $0.id == id }) {
+            do {
+                chats.append(try await self.chat(id))
+            } catch {
+                if chats.isEmpty { throw error }
+            }
         }
         return chats
     }
@@ -246,8 +315,11 @@ actor TelegramService {
             if let info = await self.user(userID) {
                 result.isOnline = info.isOnline
                 if info.isBot { result.kind = .bot }
+                result.avatarFileID = info.avatarFileID
             }
         }
+        if let fileID = result.avatarFileID { knownFileIDs.insert(fileID) }
+        registerFiles(in: result.messages)
         return result
     }
 
@@ -256,7 +328,72 @@ actor TelegramService {
         guard let object = try? await call(["@type": "getUser", "user_id": id]) else { return nil }
         let user = TGParse.user(object)
         userCache[id] = user
+        if let fileID = user.avatarFileID { knownFileIDs.insert(fileID) }
         return user
+    }
+
+    func myProfile() async throws -> TelegramProfile {
+        let user = try await call(["@type": "getMe"])
+        let userID = TGParse.int64(user["id"])
+        let fullInfo = try await call(["@type": "getUserFullInfo", "user_id": userID])
+        let profile = TGParse.profile(user: user, fullInfo: fullInfo)
+        if let fileID = profile.avatarFileID { knownFileIDs.insert(fileID) }
+        return profile
+    }
+
+    func chatProfile(chatID: Int64) async throws -> ChatProfile {
+        let object = try await call(["@type": "getChat", "chat_id": chatID])
+        let chat = TGParse.chat(object, lastReadOutbox: lastReadOutbox[chatID] ?? 0)
+        let type = object["type"] as? JSON ?? [:]
+        var profile = ChatProfile(
+            chatID: chatID,
+            title: chat.title,
+            kind: chat.kind,
+            username: nil,
+            phoneNumber: nil,
+            status: nil,
+            description: "",
+            memberCount: nil,
+            avatarFileID: chat.avatarFileID
+        )
+        switch TGParse.string(type["@type"]) {
+        case "chatTypePrivate":
+            let userID = TGParse.int64(type["user_id"])
+            let user = try await call(["@type": "getUser", "user_id": userID])
+            let full = try await call(["@type": "getUserFullInfo", "user_id": userID])
+            let userProfile = TGParse.profile(user: user, fullInfo: full)
+            profile.username = userProfile.username
+            profile.phoneNumber = userProfile.phoneNumber
+            profile.description = userProfile.bio
+            profile.status = TGParse.string((user["status"] as? JSON)?["@type"])
+            profile.avatarFileID = userProfile.avatarFileID
+        case "chatTypeBasicGroup":
+            let groupID = TGParse.int64(type["basic_group_id"])
+            let full = try await call(["@type": "getBasicGroupFullInfo", "basic_group_id": groupID])
+            profile.description = TGParse.string(full["description"])
+        case "chatTypeSupergroup":
+            let groupID = TGParse.int64(type["supergroup_id"])
+            let full = try await call(["@type": "getSupergroupFullInfo", "supergroup_id": groupID])
+            profile.description = TGParse.string(full["description"])
+            let memberCount = TGParse.int64(full["member_count"])
+            profile.memberCount = memberCount > 0 ? Int(memberCount) : nil
+        default:
+            break
+        }
+        if let fileID = profile.avatarFileID { knownFileIDs.insert(fileID) }
+        return profile
+    }
+
+    func updateMyProfile(firstName: String, lastName: String, bio: String) async throws {
+        _ = try await call([
+            "@type": "setName",
+            "first_name": firstName,
+            "last_name": lastName
+        ])
+        _ = try await call([
+            "@type": "setBio",
+            "bio": ["@type": "formattedText", "text": bio] as JSON
+        ])
     }
 
     func loadContacts(limit: Int = 300) async throws -> [Contact] {
@@ -265,7 +402,13 @@ actor TelegramService {
         var contacts: [Contact] = []
         for id in ids {
             if let info = await self.user(id) {
-                contacts.append(Contact(id: id, name: info.name, username: info.username, isOnline: info.isOnline))
+                contacts.append(Contact(
+                    id: id,
+                    name: info.name,
+                    username: info.username,
+                    isOnline: info.isOnline,
+                    avatarFileID: info.avatarFileID
+                ))
             }
         }
         return contacts
@@ -306,7 +449,195 @@ actor TelegramService {
             try? await Task.sleep(for: .milliseconds(300))
         }
         let readOutbox = lastReadOutbox[chatID] ?? 0
-        return list.reversed().map { TGParse.message($0, lastReadOutbox: readOutbox) }
+        let messages = list.reversed().map { TGParse.message($0, lastReadOutbox: readOutbox) }
+        registerFiles(in: messages)
+        return messages
+    }
+
+    func loadOlderHistory(chatID: Int64, before messageID: Int64) async throws -> [Message] {
+        let result = try await call([
+            "@type": "getChatHistory",
+            "chat_id": chatID,
+            "from_message_id": messageID,
+            "offset": 0,
+            "limit": historyPageSize,
+            "only_local": false
+        ])
+        let readOutbox = lastReadOutbox[chatID] ?? 0
+        let messages = ((result["messages"] as? [JSON]) ?? [])
+            .reversed()
+            .map { TGParse.message($0, lastReadOutbox: readOutbox) }
+        registerFiles(in: messages)
+        return messages
+    }
+
+    private func registerFiles(in messages: [Message]) {
+        for id in messages.compactMap({ $0.media?.fileID }) { knownFileIDs.insert(id) }
+    }
+
+    func downloadFileData(fileID: Int64, limit: Int64) async throws -> Data {
+        let file = try await call(["@type": "getFile", "file_id": fileID])
+        let remoteSize = TGParse.int64(file["size"])
+        guard remoteSize <= limit else {
+            throw TDError(code: -3, message: "FILE_TOO_LARGE")
+        }
+        knownFileIDs.insert(fileID)
+
+        if let data = try localFileData(file, limit: limit) {
+            try await makeMediaCacheRoom(for: fileID, expectedSize: Int64(data.count))
+            recordCachedFile(fileID, size: Int64(data.count))
+            return data
+        }
+        try await makeMediaCacheRoom(
+            for: fileID,
+            expectedSize: remoteSize > 0 ? remoteSize : limit
+        )
+        _ = try await call([
+            "@type": "downloadFile",
+            "file_id": fileID,
+            "priority": 32,
+            "offset": 0,
+            "limit": limit,
+            "synchronous": false
+        ])
+        activeDownloadIDs.insert(fileID)
+        defer { activeDownloadIDs.remove(fileID) }
+
+        for _ in 0..<240 {
+            try Task.checkCancellation()
+            let current = try await call(["@type": "getFile", "file_id": fileID])
+            let currentSize = TGParse.int64(current["size"])
+            if currentSize > limit {
+                try await cancelFileDownload(fileID: fileID)
+                throw TDError(code: -3, message: "FILE_TOO_LARGE")
+            }
+            if let data = try localFileData(current, limit: limit) {
+                try await makeMediaCacheRoom(for: fileID, expectedSize: Int64(data.count))
+                recordCachedFile(fileID, size: Int64(data.count))
+                return data
+            }
+            let downloaded = TGParse.int64((current["local"] as? JSON)?["downloaded_size"])
+            if downloaded > limit {
+                try await cancelFileDownload(fileID: fileID)
+                throw TDError(code: -3, message: "FILE_TOO_LARGE")
+            }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        throw TDError(code: -4, message: "FILE_DOWNLOAD_TIMEOUT")
+    }
+
+    private func localFileData(_ file: JSON, limit: Int64) throws -> Data? {
+        let local = file["local"] as? JSON ?? [:]
+        guard (local["is_downloading_completed"] as? Bool) == true else { return nil }
+        let path = TGParse.string(local["path"])
+        guard !path.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: path)
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        guard size <= limit else { throw TDError(code: -3, message: "FILE_TOO_LARGE") }
+        return try Data(contentsOf: url, options: .mappedIfSafe)
+    }
+
+    private func makeMediaCacheRoom(for fileID: Int64, expectedSize: Int64) async throws {
+        guard expectedSize > 0 else { return }
+        guard expectedSize <= mediaCacheLimit else {
+            throw TDError(code: -5, message: "MEDIA_CACHE_FULL")
+        }
+        var total = cachedDownloadedSizes
+            .filter { $0.key != fileID }
+            .values
+            .reduce(0, +)
+        while total + expectedSize > mediaCacheLimit {
+            guard let index = downloadedFileOrder.firstIndex(where: { $0 != fileID }) else { break }
+            let id = downloadedFileOrder[index]
+            guard let size = cachedDownloadedSizes[id] else {
+                downloadedFileOrder.remove(at: index)
+                continue
+            }
+            _ = try await call(["@type": "deleteFile", "file_id": id])
+            cachedDownloadedSizes[id] = nil
+            downloadedFileOrder.remove(at: index)
+            total -= size
+        }
+        guard total + expectedSize <= mediaCacheLimit else {
+            throw TDError(code: -5, message: "MEDIA_CACHE_FULL")
+        }
+    }
+
+    private func recordCachedFile(_ id: Int64, size: Int64) {
+        cachedDownloadedSizes[id] = size
+        downloadedFileOrder.removeAll { $0 == id }
+        downloadedFileOrder.append(id)
+    }
+
+    func cancelFileDownload(fileID: Int64) async throws {
+        _ = try await call([
+            "@type": "cancelDownloadFile",
+            "file_id": fileID,
+            "only_if_pending": false
+        ])
+        eventOut.yield(.fileCancelled(fileID: fileID))
+    }
+
+    func sendPhoto(chatID: Int64, path: String, caption: String) async throws {
+        try validateOutgoingFile(path, limit: 10 * 1_024 * 1_024)
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessagePhoto",
+                "photo": ["@type": "inputFileLocal", "path": path] as JSON,
+                "thumbnail": NSNull(),
+                "added_sticker_file_ids": [],
+                "width": 0,
+                "height": 0,
+                "caption": ["@type": "formattedText", "text": caption] as JSON,
+                "show_caption_above_media": false,
+                "self_destruct_type": NSNull(),
+                "has_spoiler": false
+            ] as JSON
+        ])
+    }
+
+    func sendDocument(chatID: Int64, path: String, caption: String) async throws {
+        try validateOutgoingFile(path, limit: 25 * 1_024 * 1_024)
+        _ = try await call([
+            "@type": "sendMessage",
+            "chat_id": chatID,
+            "input_message_content": [
+                "@type": "inputMessageDocument",
+                "document": ["@type": "inputFileLocal", "path": path] as JSON,
+                "thumbnail": NSNull(),
+                "caption": ["@type": "formattedText", "text": caption] as JSON,
+                "disable_content_type_detection": false
+            ] as JSON
+        ])
+    }
+
+    private func validateOutgoingFile(_ path: String, limit: Int64) throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        guard size > 0, size <= limit else {
+            throw TDError(code: -3, message: "FILE_TOO_LARGE")
+        }
+    }
+
+    func clearMediaCache() async throws {
+        let downloads = activeDownloadIDs
+        for id in downloads {
+            try await cancelFileDownload(fileID: id)
+        }
+        let fileIDs = knownFileIDs
+        for id in fileIDs {
+            let file = try await call(["@type": "getFile", "file_id": id])
+            let local = file["local"] as? JSON ?? [:]
+            guard (local["is_downloading_completed"] as? Bool) == true else { continue }
+            _ = try await call(["@type": "deleteFile", "file_id": id])
+        }
+        knownFileIDs.removeAll()
+        cachedDownloadedSizes.removeAll()
+        downloadedFileOrder.removeAll()
+        activeDownloadIDs.removeAll()
     }
 
     func sendText(chatID: Int64, text: String, replyToRemoteID: Int64?) async throws -> Message {
@@ -398,11 +729,11 @@ actor TelegramService {
         try await client.request(query).json
     }
 
-    private static func databaseDirectory() -> String {
+    private static func databaseDirectory() throws -> String {
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("KroGram/tdlib", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base.path
     }
 }

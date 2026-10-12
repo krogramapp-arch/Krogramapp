@@ -84,6 +84,67 @@ final class TelegramParsingTests: XCTestCase {
         XCTAssertEqual(user.username, "weather_bot")
     }
 
+    func testPhotoAndDocumentMediaMetadataArePreserved() {
+        let photo = TGParse.media([
+            "@type": "messagePhoto",
+            "photo": [
+                "sizes": [
+                    ["photo": ["id": 12, "size": 400]],
+                    ["photo": ["id": 13, "size": 1_200]]
+                ]
+            ],
+            "caption": ["text": "caption"]
+        ])
+        XCTAssertEqual(photo?.kind, .photo)
+        XCTAssertEqual(photo?.fileID, 13)
+        XCTAssertEqual(photo?.caption, "caption")
+
+        let document = TGParse.media([
+            "@type": "messageDocument",
+            "document": [
+                "file_name": "report.pdf",
+                "mime_type": "application/pdf",
+                "document": ["id": 42, "size": 8_192]
+            ],
+            "caption": ["text": ""]
+        ])
+        XCTAssertEqual(document?.kind, .document)
+        XCTAssertEqual(document?.fileID, 42)
+        XCTAssertEqual(document?.fileName, "report.pdf")
+        XCTAssertEqual(document?.fileSize, 8_192)
+    }
+
+    func testUnsupportedMessageContentIsFlagged() {
+        XCTAssertTrue(TGParse.isUnsupportedContent(["@type": "messagePoll"]))
+        XCTAssertFalse(TGParse.isUnsupportedContent(["@type": "messageText"]))
+    }
+
+    func testChatPhotoFileIDIsParsed() {
+        let chat = TGParse.chat([
+            "id": -42,
+            "title": "Group",
+            "photo": ["small": ["id": 91]],
+            "type": ["@type": "chatTypeBasicGroup"]
+        ], lastReadOutbox: 0)
+        XCTAssertEqual(chat.avatarFileID, 91)
+    }
+
+    func testProfileParsing() {
+        let profile = TGParse.profile(
+            user: [
+                "first_name": "Ada",
+                "last_name": "Lovelace",
+                "phone_number": "12345",
+                "usernames": ["active_usernames": ["ada"]]
+            ],
+            fullInfo: ["bio": ["text": "Analyst"]]
+        )
+        XCTAssertEqual(profile.displayName, "Ada Lovelace")
+        XCTAssertEqual(profile.phoneNumber, "12345")
+        XCTAssertEqual(profile.username, "ada")
+        XCTAssertEqual(profile.bio, "Analyst")
+    }
+
     func testFloodWaitMessageContainsSeconds() {
         let message = TGErrors.message(for: TDError(code: 429, message: "Too Many Requests: retry after 42"))
         XCTAssertTrue(message.contains("42"))

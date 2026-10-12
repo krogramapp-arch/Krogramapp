@@ -5,6 +5,7 @@ struct TGUser: Sendable, Equatable {
     var username: String?
     var isBot: Bool
     var isOnline: Bool
+    var avatarFileID: Int64?
 }
 
 /// Pure functions that turn TDLib JSON objects into app models.
@@ -35,6 +36,89 @@ enum TGParse {
         }
     }
 
+    static func media(_ content: JSON) -> MessageMedia? {
+        let type = string(content["@type"])
+        let mediaKind: MessageMediaKind
+        let file: JSON
+        var fileName: String?
+        var mimeType: String?
+        var fileSize: Int64 = 0
+
+        switch type {
+        case "messagePhoto":
+            mediaKind = .photo
+            let photo = content["photo"] as? JSON ?? [:]
+            let sizes = photo["sizes"] as? [JSON] ?? []
+            file = (sizes.last?["photo"] as? JSON) ?? [:]
+            fileSize = int64(file["size"])
+        case "messageVideo":
+            mediaKind = .video
+            let item = content["video"] as? JSON ?? [:]
+            file = item["video"] as? JSON ?? [:]
+            fileName = string(item["file_name"])
+            mimeType = string(item["mime_type"])
+            fileSize = int64(file["size"])
+        case "messageAnimation":
+            mediaKind = .animation
+            let item = content["animation"] as? JSON ?? [:]
+            file = item["animation"] as? JSON ?? [:]
+            fileName = string(item["file_name"])
+            mimeType = string(item["mime_type"])
+            fileSize = int64(file["size"])
+        case "messageDocument":
+            mediaKind = .document
+            let item = content["document"] as? JSON ?? [:]
+            file = item["document"] as? JSON ?? [:]
+            fileName = string(item["file_name"])
+            mimeType = string(item["mime_type"])
+            fileSize = int64(file["size"])
+        case "messageAudio":
+            mediaKind = .audio
+            let item = content["audio"] as? JSON ?? [:]
+            file = item["audio"] as? JSON ?? [:]
+            fileName = string(item["file_name"])
+            mimeType = string(item["mime_type"])
+            fileSize = int64(file["size"])
+        case "messageVoiceNote":
+            mediaKind = .voice
+            let item = content["voice_note"] as? JSON ?? [:]
+            file = item["voice"] as? JSON ?? [:]
+            mimeType = string(item["mime_type"])
+            fileSize = int64(file["size"])
+        case "messageVideoNote":
+            mediaKind = .videoNote
+            let item = content["video_note"] as? JSON ?? [:]
+            file = item["video"] as? JSON ?? [:]
+            fileSize = int64(file["size"])
+        case "messageSticker":
+            mediaKind = .sticker
+            let item = content["sticker"] as? JSON ?? [:]
+            file = item["sticker"] as? JSON ?? [:]
+            fileSize = int64(file["size"])
+        default:
+            return nil
+        }
+
+        static func isUnsupportedContent(_ content: JSON) -> Bool {
+            ![
+                "messageText", "messagePhoto", "messageVideo", "messageAnimation",
+                "messageDocument", "messageAudio", "messageVoiceNote",
+                "messageVideoNote", "messageSticker"
+            ].contains(string(content["@type"]))
+        }
+
+        let id = int64(file["id"])
+        guard id != 0 else { return nil }
+        return MessageMedia(
+            kind: mediaKind,
+            fileID: id,
+            fileName: fileName.flatMap { $0.isEmpty ? nil : $0 },
+            mimeType: mimeType.flatMap { $0.isEmpty ? nil : $0 },
+            fileSize: fileSize,
+            caption: string((content["caption"] as? JSON)?["text"])
+        )
+    }
+
     static func message(_ m: JSON, lastReadOutbox: Int64) -> Message {
         let id = int64(m["id"])
         let outgoing = (m["is_outgoing"] as? Bool) ?? false
@@ -52,7 +136,9 @@ enum TGParse {
             state: state,
             isEdited: int64(m["edit_date"]) > 0,
             remoteID: id,
-            replyToRemoteID: replyID == 0 ? nil : replyID
+            replyToRemoteID: replyID == 0 ? nil : replyID,
+            media: media(m["content"] as? JSON ?? [:]),
+            isUnsupportedContent: isUnsupportedContent(m["content"] as? JSON ?? [:])
         )
     }
 
@@ -92,7 +178,8 @@ enum TGParse {
             isPinned: pinned,
             isArchived: archived,
             isMuted: muteFor > 0,
-            messages: messages
+            messages: messages,
+            avatarFileID: int64(((c["photo"] as? JSON)?["small"] as? JSON)?["id"]).nonZero
         )
     }
 
@@ -103,7 +190,29 @@ enum TGParse {
         let usernames = (u["usernames"] as? JSON)?["active_usernames"] as? [String]
         let isBot = string((u["type"] as? JSON)?["@type"]) == "userTypeBot"
         let isOnline = string((u["status"] as? JSON)?["@type"]) == "userStatusOnline"
-        return TGUser(name: name, username: usernames?.first, isBot: isBot, isOnline: isOnline)
+        let avatarID = int64(((u["profile_photo"] as? JSON)?["small"] as? JSON)?["id"])
+        return TGUser(
+            name: name,
+            username: usernames?.first,
+            isBot: isBot,
+            isOnline: isOnline,
+            avatarFileID: avatarID == 0 ? nil : avatarID
+        )
+    }
+
+    static func profile(user: JSON, fullInfo: JSON) -> TelegramProfile {
+        let username = (user["usernames"] as? JSON)?["active_usernames"] as? [String]
+        let bioValue = fullInfo["bio"]
+        let bio = (bioValue as? JSON).map { string($0["text"]) } ?? string(bioValue)
+        let avatarID = int64(((user["profile_photo"] as? JSON)?["small"] as? JSON)?["id"])
+        return TelegramProfile(
+            firstName: string(user["first_name"]),
+            lastName: string(user["last_name"]),
+            phoneNumber: string(user["phone_number"]),
+            username: username?.first,
+            bio: bio,
+            avatarFileID: avatarID == 0 ? nil : avatarID
+        )
     }
 }
 
@@ -120,9 +229,20 @@ enum TGErrors {
 
     static func message(for error: Error) -> String {
         guard let td = error as? TDError else { return L("err.generic") }
+        switch td.message {
+        case "FILE_TOO_LARGE": return L("err.fileTooLarge")
+        case "MEDIA_CACHE_FULL": return L("err.mediaCacheFull")
+        case "FILE_DOWNLOAD_TIMEOUT": return L("err.fileDownloadTimeout")
+        case "OUTGOING_STORAGE_FULL": return L("err.outgoingStorageFull")
+        default: break
+        }
         if td.code == 429 || td.message.hasPrefix("FLOOD_WAIT") {
             let digits = td.message.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
             if let seconds = Int(digits) { return String(format: L("err.flood"), seconds) }
+        }
+
+        private extension Int64 {
+            var nonZero: Int64? { self == 0 ? nil : self }
         }
         if let key = known[td.message] { return L(key) }
         return L("err.generic")

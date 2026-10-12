@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @EnvironmentObject private var themes: ThemeStore
@@ -8,6 +9,7 @@ struct SettingsView: View {
     @EnvironmentObject private var commander: CommanderStore
     @State private var showImport = false
     @State private var confirmLogout = false
+    @State private var profileImage: UIImage?
 
     private var versionString: String {
         let info = Bundle.main.infoDictionary
@@ -19,6 +21,33 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if chats.isLive {
+                    Section {
+                        NavigationLink {
+                            AccountProfileView()
+                        } label: {
+                            HStack(spacing: KroSpacing.md) {
+                                AvatarView(
+                                    name: chats.profile?.displayName ?? "",
+                                    seed: Int(truncatingIfNeeded: chats.profile?.avatarFileID ?? 0),
+                                    size: 52,
+                                    image: profileImage
+                                )
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(chats.profile?.displayName ?? L("profile.title"))
+                                        .kro(.headline, weight: .semibold)
+                                    Text(chats.profile?.username.map { "@\($0)" } ?? L("profile.open"))
+                                        .kro(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                        }
+                        .listRowBackground(Rectangle().fill(.ultraThinMaterial))
+                    } header: {
+                        Text("profile.myAccount")
+                    }
+                }
                 Section("settings.appearance") {
                     Picker("settings.mode", selection: $themes.appearance) {
                         ForEach(AppearanceMode.allCases) { mode in
@@ -28,10 +57,23 @@ struct SettingsView: View {
                 }
 
                 Section("settings.account") {
+                    if let sessionIssue = session.sessionIssue {
+                        VStack(alignment: .leading, spacing: KroSpacing.sm) {
+                            Label(sessionIssue, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                            Button("session.retry") { session.retryConnection() }
+                        }
+                    }
+                    if let mediaError = chats.mediaError {
+                        Text(mediaError).foregroundStyle(.red)
+                    }
                     if chats.isLive {
                         Label("session.live", systemImage: "checkmark.seal.fill")
                         Button(role: .destructive) { confirmLogout = true } label: {
                             Label("session.logout", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        if let errorText = session.errorText {
+                            Text(errorText).foregroundStyle(.red)
                         }
                     } else {
                         Label("session.demo", systemImage: "testtube.2")
@@ -172,8 +214,23 @@ struct SettingsView: View {
                     Text("about.phase").kro(.footnote).foregroundStyle(.secondary)
                     Text("about.encryption").kro(.footnote).foregroundStyle(.secondary)
                 }
+
+                Section("settings.storage") {
+                    Button("storage.clearMediaCache", role: .destructive) {
+                        Task { await chats.clearMediaCache() }
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
+            .task {
+                guard chats.isLive else { return }
+                await chats.loadMyProfile()
+                guard let fileID = chats.profile?.avatarFileID else { return }
+                do {
+                    let data = try await chats.downloadFile(fileID: fileID, limit: 2 * 1_024 * 1_024)
+                    profileImage = UIImage(data: data)
+                } catch {}
+            }
             .background(AuroraBackdrop())
             .navigationTitle("settings.title")
             .sheet(isPresented: $showImport) { ImportThemeSheet() }

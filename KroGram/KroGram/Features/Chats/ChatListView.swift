@@ -1,9 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct ChatRow: View {
     let chat: Chat
     let draft: String
+    @EnvironmentObject private var vm: ChatsViewModel
     @EnvironmentObject private var themes: ThemeStore
+    @State private var avatarImage: UIImage?
 
     var body: some View {
         HStack(spacing: KroSpacing.md) {
@@ -11,7 +14,8 @@ struct ChatRow: View {
                 name: chat.title,
                 seed: Int(truncatingIfNeeded: chat.id),
                 size: 52,
-                showsOnline: chat.kind == .direct && chat.isOnline
+                showsOnline: chat.kind == .direct && chat.isOnline,
+                image: avatarImage
             )
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
@@ -47,6 +51,20 @@ struct ChatRow: View {
         }
         .padding(.vertical, themes.current.density.rowPadding)
         .accessibilityElement(children: .combine)
+        .task(id: chat.avatarFileID) {
+            guard let fileID = chat.avatarFileID else {
+                avatarImage = nil
+                return
+            }
+            if let data = vm.cachedFileData(fileID: fileID) {
+                avatarImage = UIImage(data: data)
+                return
+            }
+            do {
+                let data = try await vm.downloadFile(fileID: fileID, limit: 2 * 1_024 * 1_024)
+                avatarImage = UIImage(data: data)
+            } catch {}
+        }
     }
 
     @ViewBuilder
@@ -124,6 +142,12 @@ struct ChatListView: View {
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                     }
+                    if let error = vm.mediaError {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .listRowSeparator(.hidden)
+                    }
                     filterBar
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
@@ -188,6 +212,11 @@ struct ChatListView: View {
             ChatRow(chat: chat, draft: vm.draft(for: chat.id))
         }
         .listRowBackground(Rectangle().fill(.ultraThinMaterial))
+        .onAppear {
+            if chat.id == vm.visibleChats.last?.id {
+                Task { await vm.loadMoreChats() }
+            }
+        }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if vm.canDeleteChats {
                 Button(role: .destructive) {

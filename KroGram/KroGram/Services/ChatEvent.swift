@@ -13,6 +13,8 @@ enum ChatEvent: Sendable {
     case sendFailed(chatID: Int64, oldRemoteID: Int64)
     case deleted(chatID: Int64, remoteIDs: [Int64])
     case userStatus(userID: Int64, isOnline: Bool)
+    case fileProgress(fileID: Int64, downloaded: Int64, total: Int64, completed: Bool)
+    case fileCancelled(fileID: Int64)
     case connection(ConnectionState)
 }
 

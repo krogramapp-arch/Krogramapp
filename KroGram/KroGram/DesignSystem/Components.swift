@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Avatar
 
@@ -7,6 +8,7 @@ struct AvatarView: View {
     let seed: Int
     var size: CGFloat = 48
     var showsOnline = false
+    var image: UIImage? = nil
     @EnvironmentObject private var themes: ThemeStore
 
     private static let palettes: [[Color]] = [
@@ -19,7 +21,7 @@ struct AvatarView: View {
     ]
 
     private var colors: [Color] {
-        Self.palettes[abs(seed) % Self.palettes.count]
+        Self.palettes[Int(UInt(bitPattern: seed) % UInt(Self.palettes.count))]
     }
 
     private var initial: String {
@@ -31,12 +33,20 @@ struct AvatarView: View {
             Circle()
                 .fill(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
                 .frame(width: size, height: size)
-                .overlay(Circle().strokeBorder(.white.opacity(0.32), lineWidth: 1))
                 .overlay {
-                    Text(initial)
-                        .font(.system(size: size * 0.4, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: size, height: size)
+                            .clipShape(Circle())
+                    } else {
+                        Text(initial)
+                            .font(.system(size: size * 0.4, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
                 }
+                .overlay(Circle().strokeBorder(.white.opacity(0.32), lineWidth: 1))
                 .neonGlow(colors.last ?? themes.current.accent, radius: size * 0.2)
             if showsOnline {
                 Circle()

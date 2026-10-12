@@ -16,6 +16,12 @@ final class ChatsViewModel: ObservableObject {
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var contacts: [Contact] = []
     @Published private(set) var loadState: LoadState = .idle
+    @Published private(set) var contactsLoading = false
+    @Published private(set) var isLoadingMoreChats = false
+    @Published private(set) var mediaProgress: [Int64: (downloaded: Int64, total: Int64)] = [:]
+    @Published private(set) var mediaError: String?
+    @Published private(set) var profile: TelegramProfile?
+    @Published private(set) var profileLoading = false
     @Published private(set) var drafts: [Int64: String] = [:]
     @Published private(set) var connection: ConnectionState = .ready
     @Published var searchText = ""
@@ -31,6 +37,16 @@ final class ChatsViewModel: ObservableObject {
     private var eventTask: Task<Void, Never>?
     private var hiddenIDs: Set<Int64>
     private var lastTyping: [Int64: Date] = [:]
+    private var historyLoading: Set<Int64> = []
+    private var historyExhausted: Set<Int64> = []
+    private var activeChatID: Int64?
+    private var moreChatsExhausted = false
+    private var contactsLoaded = false
+    private var mediaTasks: [Int64: Task<Data, Error>] = [:]
+    private var dataCache: [Int64: Data] = [:]
+    private var dataCacheOrder: [Int64] = []
+    private var dataCacheBytes = 0
+    private let maxDataCacheBytes = 50 * 1_024 * 1_024
 
     private static let draftsKey = "krochat.drafts.v1"
     private static let hiddenKey = "krochat.hidden.v1"
@@ -66,6 +82,18 @@ final class ChatsViewModel: ObservableObject {
         folders = []
         contacts = []
         loadState = .idle
+        contactsLoading = false
+        contactsLoaded = false
+        isLoadingMoreChats = false
+        historyLoading.removeAll()
+        historyExhausted.removeAll()
+        activeChatID = nil
+        moreChatsExhausted = false
+        mediaProgress.removeAll()
+        dataCache.removeAll()
+        dataCacheOrder.removeAll()
+        dataCacheBytes = 0
+        profile = nil
         connection = .ready
         selectedFolderID = nil
         startEvents()
@@ -101,22 +129,53 @@ final class ChatsViewModel: ObservableObject {
             let repo = repository
             async let loadedChats = repo.loadChats()
             async let loadedFolders = repo.loadFolders()
-            async let loadedContacts = repo.loadContacts()
-            let (c, f, k) = try await (loadedChats, loadedFolders, loadedContacts)
+            let (c, f) = try await (loadedChats, loadedFolders)
             var merged = c
             if repo.isReal {
                 for i in merged.indices where hiddenIDs.contains(merged[i].id) { merged[i].isHidden = true }
             }
             chats = merged
             folders = f
-            contacts = k
             loadState = .loaded
         } catch {
             loadState = .failed
         }
     }
 
+    func loadMoreChats() async {
+        guard repository.isReal, !isLoadingMoreChats, !moreChatsExhausted else { return }
+        isLoadingMoreChats = true
+        defer { isLoadingMoreChats = false }
+        do {
+            let additional = try await repository.loadMoreChats()
+            if additional.isEmpty {
+                moreChatsExhausted = true
+                return
+            }
+            for var chat in additional where !chats.contains(where: { $0.id == chat.id }) {
+                chat.isHidden = hiddenIDs.contains(chat.id)
+                chats.append(chat)
+            }
+        } catch {
+            loadState = .failed
+        }
+    }
+
+    func loadContacts() async {
+        guard !contactsLoaded, !contactsLoading else { return }
+        contactsLoading = true
+        defer { contactsLoading = false }
+        do {
+            contacts = try await repository.loadContacts()
+            contactsLoaded = true
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+        }
+    }
+
     func reload() async {
+        guard loadState != .loading else { return }
         loadState = .idle
         await load()
     }
@@ -130,7 +189,10 @@ final class ChatsViewModel: ObservableObject {
         }
     }
 
-    var mainChats: [Chat] { sorted(chats.filter { !$0.isArchived && !$0.isHidden }) }
+    var mainChats: [Chat] {
+        let visible = chats.filter { !$0.isArchived && !$0.isHidden }
+        return repository.isReal ? visible : sorted(visible)
+    }
     var totalUnread: Int { mainChats.filter { !$0.isMuted }.reduce(0) { $0 + $1.unread } }
 
     var visibleChats: [Chat] {
@@ -150,8 +212,12 @@ final class ChatsViewModel: ObservableObject {
         switch scope {
         case .unread: return mainChats.filter { $0.unread > 0 }
         case .pinned: return mainChats.filter { $0.isPinned }
-        case .archived: return sorted(chats.filter { $0.isArchived })
-        case .hidden: return sorted(chats.filter { $0.isHidden })
+        case .archived:
+            let archived = chats.filter(\.isArchived)
+            return repository.isReal ? archived : sorted(archived)
+        case .hidden:
+            let hidden = chats.filter(\.isHidden)
+            return repository.isReal ? hidden : sorted(hidden)
         case .folder(let id): return mainChats.filter { $0.folderIDs.contains(id) }
         }
     }
@@ -270,20 +336,221 @@ final class ChatsViewModel: ObservableObject {
     }
 
     func openChat(_ id: Int64) async {
+        activeChatID = id
         let repo = repository
         await repo.setChatOpen(id, true)
         if let history = try? await repo.loadHistory(chatID: id), !history.isEmpty {
+            guard activeChatID == id else { return }
             mutateChat(id) { chat in
                 let pending = chat.messages.filter { $0.remoteID == nil && $0.isOutgoing && $0.state != .sent }
-                chat.messages = history + pending
+                chat.messages = Array((history + pending).suffix(200))
             }
+            if history.count < 50 { historyExhausted.insert(id) }
         }
         if !privacy.hideRead { await markReadNow(id) }
     }
 
     func closeChat(_ id: Int64) {
+        if activeChatID == id { activeChatID = nil }
         let repo = repository
         Task { await repo.setChatOpen(id, false) }
+        mutateChat(id) { chat in
+            let latest = chat.messages.last
+            let pending = chat.messages.filter { $0.remoteID == nil && $0.isOutgoing && $0.state != .sent }.suffix(50)
+            chat.messages = (latest.map { [$0] } ?? []) + pending.filter { $0.id != latest?.id }
+        }
+    }
+
+    func loadOlderHistory(chatID: Int64) async {
+        guard repository.isReal, !historyExhausted.contains(chatID),
+              !historyLoading.contains(chatID),
+              let first = chat(chatID)?.messages.first(where: { $0.remoteID != nil }),
+              let remoteID = first.remoteID else { return }
+        historyLoading.insert(chatID)
+        defer { historyLoading.remove(chatID) }
+        do {
+            guard let older = try await repository.loadOlderHistory(chatID: chatID, before: remoteID) else { return }
+            guard activeChatID == chatID else { return }
+            if older.count < 50 { historyExhausted.insert(chatID) }
+            guard !older.isEmpty else { return }
+            mutateChat(chatID) { chat in
+                let existingIDs = Set(chat.messages.compactMap(\.remoteID))
+                let unique = older.filter { message in
+                    guard let id = message.remoteID else { return true }
+                    return !existingIDs.contains(id)
+                }
+                chat.messages = Array((unique + chat.messages).suffix(200))
+            }
+        } catch {
+            mediaError = TGErrors.message(for: error)
+        }
+    }
+
+    func loadMyProfile() async {
+        guard !profileLoading else { return }
+        profileLoading = true
+        defer { profileLoading = false }
+        do {
+            profile = try await repository.loadMyProfile()
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+        }
+    }
+
+    func updateMyProfile(firstName: String, lastName: String, bio: String) async throws {
+        do {
+            try await repository.updateMyProfile(firstName: firstName, lastName: lastName, bio: bio)
+            profile = try await repository.loadMyProfile()
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func loadChatProfile(chatID: Int64) async throws -> ChatProfile? {
+        try await repository.loadChatProfile(chatID: chatID)
+    }
+
+    func setMediaError(_ message: String?) {
+        mediaError = message
+    }
+
+    func cachedFileData(fileID: Int64) -> Data? {
+        guard let data = dataCache[fileID] else { return nil }
+        dataCacheOrder.removeAll { $0 == fileID }
+        dataCacheOrder.append(fileID)
+        return data
+    }
+
+    func cacheFileURL(fileID: Int64, data: Data, fileName: String?, mimeType: String?) throws -> URL {
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("KroGram/Media", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let extensionName = Self.safeExtension(fileName: fileName, mimeType: mimeType)
+        let destination = directory.appendingPathComponent("\(fileID).\(extensionName)")
+        try data.write(to: destination, options: .atomic)
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]
+        )
+        var entries: [(url: URL, size: Int, modified: Date)] = []
+        for url in files where url != destination {
+            let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            entries.append((url, values.fileSize ?? 0, values.contentModificationDate ?? .distantPast))
+        }
+        var total = data.count + entries.reduce(0) { $0 + $1.size }
+        for entry in entries.sorted(by: { $0.modified < $1.modified }) where total > maxDataCacheBytes {
+            try FileManager.default.removeItem(at: entry.url)
+            total -= entry.size
+        }
+        return destination
+    }
+
+    private static func safeExtension(fileName: String?, mimeType: String?) -> String {
+        if let ext = fileName.map({ URL(fileURLWithPath: $0).pathExtension.lowercased() }),
+           !ext.isEmpty, ext.count <= 8,
+           ext.range(of: "^[a-z0-9]+$", options: .regularExpression) != nil {
+            return ext
+        }
+        switch mimeType {
+        case "image/jpeg": return "jpg"
+        case "image/png": return "png"
+        case "video/mp4": return "mp4"
+        case "audio/mpeg": return "mp3"
+        case "audio/ogg": return "ogg"
+        default: return "bin"
+        }
+    }
+
+    func downloadFile(fileID: Int64, limit: Int64) async throws -> Data {
+        if let cached = cachedFileData(fileID: fileID) { return cached }
+        if let existing = mediaTasks[fileID] { return try await existing.value }
+        mediaError = nil
+        let repo = repository
+        let task = Task<Data, Error> {
+            try await withTaskCancellationHandler {
+                try await repo.downloadFileData(fileID: fileID, limit: limit)
+            } onCancel: {
+                Task {
+                    do {
+                        try await repo.cancelFileDownload(fileID: fileID)
+                    } catch {
+                        await MainActor.run { self.mediaError = TGErrors.message(for: error) }
+                    }
+                }
+            }
+        }
+        mediaTasks[fileID] = task
+        do {
+            let data = try await task.value
+            mediaTasks[fileID] = nil
+            cache(data, for: fileID)
+            mediaProgress[fileID] = nil
+            mediaError = nil
+            return data
+        } catch {
+            mediaTasks[fileID] = nil
+            if !(error is CancellationError) { mediaError = TGErrors.message(for: error) }
+            throw error
+        }
+    }
+
+    func cancelFileDownload(fileID: Int64) {
+        mediaTasks[fileID]?.cancel()
+        mediaProgress[fileID] = nil
+    }
+
+    private func cache(_ data: Data, for fileID: Int64) {
+        guard data.count <= maxDataCacheBytes else { return }
+        if let old = dataCache[fileID] { dataCacheBytes -= old.count }
+        dataCache[fileID] = data
+        dataCacheBytes += data.count
+        dataCacheOrder.removeAll { $0 == fileID }
+        dataCacheOrder.append(fileID)
+        while dataCacheBytes > maxDataCacheBytes, let oldest = dataCacheOrder.first {
+            dataCacheOrder.removeFirst()
+            dataCacheBytes -= dataCache.removeValue(forKey: oldest)?.count ?? 0
+        }
+    }
+
+    func sendPhoto(path: String, caption: String, to chatID: Int64) async throws {
+        do {
+            try await repository.sendPhoto(chatID: chatID, path: path, caption: caption)
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func sendDocument(path: String, caption: String, to chatID: Int64) async throws {
+        do {
+            try await repository.sendDocument(chatID: chatID, path: path, caption: caption)
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+            throw error
+        }
+    }
+
+    func clearMediaCache() async {
+        do {
+            try await repository.clearMediaCache()
+            let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("KroGram/Media", isDirectory: true)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+            dataCache.removeAll()
+            dataCacheOrder.removeAll()
+            dataCacheBytes = 0
+            mediaProgress.removeAll()
+            mediaError = nil
+        } catch {
+            mediaError = TGErrors.message(for: error)
+        }
     }
 
     /// Sends a read receipt for incoming messages (explicit user action or ghost mode off).
@@ -321,7 +588,15 @@ final class ChatsViewModel: ObservableObject {
                 chats[ci].messages[pi].remoteID = message.remoteID
                 return
             }
-            chats[ci].messages.append(message)
+            if activeChatID == chatID {
+                chats[ci].messages.append(message)
+                chats[ci].messages = Array(chats[ci].messages.suffix(200))
+            } else {
+                let pending = chats[ci].messages.filter {
+                    $0.remoteID == nil && $0.isOutgoing && $0.state != .sent
+                }.suffix(50)
+                chats[ci].messages = [message] + pending
+            }
 
         case .messageContent(let chatID, let remoteID, let text):
             mutateChat(chatID) { chat in
@@ -358,6 +633,16 @@ final class ChatsViewModel: ObservableObject {
         case .userStatus(let userID, let online):
             mutateChat(userID) { $0.isOnline = online }
 
+        case .fileProgress(let fileID, let downloaded, let total, let completed):
+            if completed {
+                mediaProgress[fileID] = nil
+            } else {
+                mediaProgress[fileID] = (downloaded, total)
+            }
+
+        case .fileCancelled(let fileID):
+            mediaProgress[fileID] = nil
+
         case .connection(let state):
             connection = state
         }
@@ -386,7 +671,10 @@ final class ChatsViewModel: ObservableObject {
             chat(chatID)?.messages.first { $0.id == id }?.remoteID
         }
         let message = Message(text: trimmed, isOutgoing: true, state: .sending, replyToID: replyTo, replyToRemoteID: replyRemote)
-        mutateChat(chatID) { $0.messages.append(message) }
+        mutateChat(chatID) { chat in
+            chat.messages.append(message)
+            chat.messages = Array(chat.messages.suffix(200))
+        }
         Task { await deliver(localID: message.id, text: trimmed, chatID: chatID, replyRemote: replyRemote) }
     }
 

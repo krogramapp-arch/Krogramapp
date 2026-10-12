@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
 
 // MARK: - Link detection
 
@@ -43,9 +45,17 @@ struct MessageBubble: View {
                     }
                     .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(linkified(message.text))
-                    .kro(.body)
-                    .tint(foreground)
+                if message.isUnsupportedContent {
+                    Label("msg.unsupported", systemImage: "exclamationmark.bubble")
+                        .font(.footnote)
+                } else if let media = message.media {
+                    MediaMessageView(media: media)
+                    if !media.caption.isEmpty {
+                        Text(linkified(media.caption)).kro(.body).tint(foreground)
+                    }
+                } else {
+                    Text(linkified(message.text)).kro(.body).tint(foreground)
+                }
                 footer(foreground)
                 if !message.reactions.isEmpty {
                     HStack(spacing: 4) {
@@ -116,6 +126,9 @@ struct ChatView: View {
     @State private var query = ""
     @State private var isSearching = false
     @State private var commanderResponse: String?
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var showFileImporter = false
+    @State private var showChatProfile = false
 
     private static let reactions = ["👍", "❤️", "😂", "🔥"]
 
@@ -139,10 +152,12 @@ struct ChatView: View {
                                 bubble(message, in: chat)
                                     .id(message.id)
                                     .transition(KroBlurTransition())
+                                    .onAppear { loadOlderIfAtTop(message, chat: chat) }
                             } else {
                                 bubble(message, in: chat)
                                     .id(message.id)
                                     .transition(.identity)
+                                    .onAppear { loadOlderIfAtTop(message, chat: chat) }
                             }
                         }
                     }
@@ -152,13 +167,20 @@ struct ChatView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear { scrollToEnd(proxy, chat) }
-                .onChange(of: chat.messages.count) { _, _ in scrollToEnd(proxy, chat) }
+                .onChange(of: chat.messages.last?.id) { _, _ in scrollToEnd(proxy, chat) }
             }
             if let commanderResponse {
                 commanderResult(commanderResponse)
                     .padding(.horizontal, KroSpacing.md)
                     .padding(.bottom, KroSpacing.xs)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            if let mediaError = vm.mediaError {
+                HStack {
+                    Text(mediaError).kro(.footnote).foregroundStyle(.red)
+                    Spacer()
+                }
+                .padding(.horizontal, KroSpacing.md)
             }
             if editing == nil, replyTo == nil, !commanderSuggestions.isEmpty {
                 commandSuggestions
@@ -168,8 +190,19 @@ struct ChatView: View {
         .background(ChatWallpaper(style: theme.wallpaper, accent: theme.accent).ignoresSafeArea())
         .navigationTitle(chat.title)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showChatProfile) {
+            ChatProfileView(chatID: chatID)
+        }
         .searchable(text: $query, isPresented: $isSearching, prompt: Text("chat.search"))
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Button { showChatProfile = true } label: {
+                    Text(chat.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+                .accessibilityHint(Text("profile.openChat"))
+            }
             if chat.unread > 0 && privacy.hideRead {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -185,13 +218,24 @@ struct ChatView: View {
         .task { await vm.openChat(chatID) }
         .onDisappear {
             vm.setDraft(text, for: chatID)
-            vm.closeChat(chatID)
+            if !showChatProfile { vm.closeChat(chatID) }
         }
         .onChange(of: text) { _, newValue in
             if !newValue.isEmpty { vm.userTyped(chatID) }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { vm.setDraft(text, for: chatID) }
+        }
+        .onChange(of: selectedPhoto) { _, photo in
+            guard let photo else { return }
+            Task { await sendPickedPhoto(photo) }
+        }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            Task { await importSelectedFile(result) }
         }
     }
 
@@ -260,14 +304,22 @@ struct ChatView: View {
             }
             HStack(alignment: .bottom, spacing: KroSpacing.sm) {
                 Menu {
-                    Button {} label: { Label("chat.attach.photo", systemImage: "photo") }.disabled(true)
-                    Button {} label: { Label("chat.attach.file", systemImage: "doc") }.disabled(true)
-                    Button {} label: { Label("chat.attach.audio", systemImage: "mic") }.disabled(true)
-                    Text("chat.attach.soon")
+                    if vm.isLive {
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            Label("chat.attach.photo", systemImage: "photo")
+                        }
+                        Button {
+                            showFileImporter = true
+                        } label: {
+                            Label("chat.attach.file", systemImage: "doc")
+                        }
+                    } else {
+                        Text("media.realOnly")
+                    }
                 } label: {
                     Image(systemName: "plus.circle.fill").font(.title2)
                 }
-                .accessibilityLabel(Text("chat.attach.soon"))
+                .accessibilityLabel(Text("chat.attach.photo"))
                 TextField("chat.message.placeholder", text: $text, axis: .vertical)
                     .lineLimit(1...5)
                     .kro(.body)
@@ -380,12 +432,81 @@ struct ChatView: View {
         vm.setDraft("", for: chatID)
     }
 
+    @MainActor
+    private func sendPickedPhoto(_ item: PhotosPickerItem) async {
+        defer { selectedPhoto = nil }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                vm.setMediaError(L("err.generic"))
+                return
+            }
+            guard data.count <= 10 * 1_024 * 1_024 else {
+                vm.setMediaError(L("media.tooLarge"))
+                return
+            }
+            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
+            let url = try storeOutgoingFile(data, fileExtension: ext)
+            try await vm.sendPhoto(path: url.path, caption: text, to: chatID)
+            text = ""
+        } catch {
+            vm.setMediaError(TGErrors.message(for: error))
+        }
+    }
+
+    @MainActor
+    private func importSelectedFile(_ result: Result<[URL], Error>) async {
+        do {
+            guard let source = try result.get().first else { return }
+            let hasAccess = source.startAccessingSecurityScopedResource()
+            defer { if hasAccess { source.stopAccessingSecurityScopedResource() } }
+            let attributes = try FileManager.default.attributesOfItem(atPath: source.path)
+            let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            guard size > 0, size <= 25 * 1_024 * 1_024 else {
+                vm.setMediaError(L("media.tooLarge"))
+                return
+            }
+            let data = try Data(contentsOf: source, options: .mappedIfSafe)
+            let url = try storeOutgoingFile(data, fileExtension: source.pathExtension)
+            try await vm.sendDocument(path: url.path, caption: text, to: chatID)
+            text = ""
+        } catch {
+            vm.setMediaError(TGErrors.message(for: error))
+        }
+    }
+
+    private func storeOutgoingFile(_ data: Data, fileExtension ext: String) throws -> URL {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("KroGram/outgoing", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let existing = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        )
+        let currentSize = try existing.reduce(Int64.zero) { total, url in
+            let values = try url.resourceValues(forKeys: [.fileSizeKey])
+            return total + Int64(values.fileSize ?? 0)
+        }
+        guard currentSize + Int64(data.count) <= 100 * 1_024 * 1_024 else {
+            throw TDError(code: -6, message: "OUTGOING_STORAGE_FULL")
+        }
+        let safeExtension = ext.range(of: "^[a-zA-Z0-9]{1,8}$", options: .regularExpression) == nil ? "bin" : ext
+        let destination = directory.appendingPathComponent("\(UUID().uuidString).\(safeExtension)")
+        try data.write(to: destination, options: .atomic)
+        return destination
+    }
+
     private func scrollToEnd(_ proxy: ScrollViewProxy, _ chat: Chat) {
         guard let last = chat.messages.last else { return }
         if themes.shouldAnimate(reduceMotion: reduceMotion) {
             withAnimation(.snappy) { proxy.scrollTo(last.id, anchor: .bottom) }
         } else {
             proxy.scrollTo(last.id, anchor: .bottom)
+        }
+
+        private func loadOlderIfAtTop(_ message: Message, chat: Chat) {
+            guard query.isEmpty,
+                  message.id == chat.messages.first(where: { $0.remoteID != nil })?.id else { return }
+            Task { await vm.loadOlderHistory(chatID: chatID) }
         }
     }
 }

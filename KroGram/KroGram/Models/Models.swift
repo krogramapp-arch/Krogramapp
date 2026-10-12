@@ -30,6 +30,8 @@ struct Message: Identifiable, Hashable, Sendable {
     /// Telegram message id (nil for demo data and for messages not yet acknowledged).
     var remoteID: Int64?
     var replyToRemoteID: Int64?
+    var media: MessageMedia?
+    var isUnsupportedContent: Bool
 
     init(
         id: UUID = UUID(),
@@ -41,7 +43,9 @@ struct Message: Identifiable, Hashable, Sendable {
         reactions: [String] = [],
         isEdited: Bool = false,
         remoteID: Int64? = nil,
-        replyToRemoteID: Int64? = nil
+        replyToRemoteID: Int64? = nil,
+        media: MessageMedia? = nil,
+        isUnsupportedContent: Bool = false
     ) {
         self.id = id
         self.text = text
@@ -53,7 +57,22 @@ struct Message: Identifiable, Hashable, Sendable {
         self.isEdited = isEdited
         self.remoteID = remoteID
         self.replyToRemoteID = replyToRemoteID
+        self.media = media
+        self.isUnsupportedContent = isUnsupportedContent
     }
+}
+
+enum MessageMediaKind: String, Hashable, Sendable {
+    case photo, video, animation, document, audio, voice, videoNote, sticker
+}
+
+struct MessageMedia: Hashable, Sendable {
+    let kind: MessageMediaKind
+    let fileID: Int64
+    let fileName: String?
+    let mimeType: String?
+    let fileSize: Int64
+    let caption: String
 }
 
 struct Chat: Identifiable, Hashable, Sendable {
@@ -68,6 +87,7 @@ struct Chat: Identifiable, Hashable, Sendable {
     var isMuted: Bool
     var folderIDs: Set<UUID>
     var messages: [Message]
+    var avatarFileID: Int64?
 
     init(
         id: Int64,
@@ -80,7 +100,8 @@ struct Chat: Identifiable, Hashable, Sendable {
         isHidden: Bool = false,
         isMuted: Bool = false,
         folderIDs: Set<UUID> = [],
-        messages: [Message] = []
+        messages: [Message] = [],
+        avatarFileID: Int64? = nil
     ) {
         self.id = id
         self.title = title
@@ -93,6 +114,7 @@ struct Chat: Identifiable, Hashable, Sendable {
         self.isMuted = isMuted
         self.folderIDs = folderIDs
         self.messages = messages
+        self.avatarFileID = avatarFileID
     }
 
     var lastMessageText: String { messages.last?.text ?? "" }
@@ -116,6 +138,32 @@ struct Contact: Identifiable, Hashable, Sendable {
     var name: String
     var username: String?
     var isOnline: Bool
+    var avatarFileID: Int64? = nil
+}
+
+struct TelegramProfile: Hashable, Sendable {
+    var firstName: String
+    var lastName: String
+    var phoneNumber: String
+    var username: String?
+    var bio: String
+    var avatarFileID: Int64?
+
+    var displayName: String {
+        "\(firstName) \(lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct ChatProfile: Hashable, Sendable {
+    var chatID: Int64
+    var title: String
+    var kind: ChatKind
+    var username: String?
+    var phoneNumber: String?
+    var status: String?
+    var description: String
+    var memberCount: Int?
+    var avatarFileID: Int64?
 }
 
 // MARK: - Filters

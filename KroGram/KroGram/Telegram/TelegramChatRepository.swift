@@ -8,12 +8,36 @@ struct TelegramChatRepository: ChatRepository {
     var events: AsyncStream<ChatEvent>? { service.events }
 
     func loadChats() async throws -> [Chat] { try await service.loadChats() }
+    func loadMoreChats() async throws -> [Chat] { try await service.loadMoreChats() }
     func loadFolders() async throws -> [ChatFolder] { [] }
     func loadContacts() async throws -> [Contact] { try await service.loadContacts() }
     func send(text: String, chatID: Int64) async throws -> DeliveryState { .sent }
 
     func refreshChat(_ id: Int64) async throws -> Chat? { try await service.chat(id) }
     func loadHistory(chatID: Int64) async throws -> [Message]? { try await service.loadHistory(chatID: chatID) }
+    func loadOlderHistory(chatID: Int64, before messageID: Int64) async throws -> [Message]? {
+        try await service.loadOlderHistory(chatID: chatID, before: messageID)
+    }
+    func loadMyProfile() async throws -> TelegramProfile? { try await service.myProfile() }
+    func loadChatProfile(chatID: Int64) async throws -> ChatProfile? {
+        try await service.chatProfile(chatID: chatID)
+    }
+    func updateMyProfile(firstName: String, lastName: String, bio: String) async throws {
+        try await service.updateMyProfile(firstName: firstName, lastName: lastName, bio: bio)
+    }
+    func downloadFileData(fileID: Int64, limit: Int64) async throws -> Data {
+        try await service.downloadFileData(fileID: fileID, limit: limit)
+    }
+    func cancelFileDownload(fileID: Int64) async throws {
+        try await service.cancelFileDownload(fileID: fileID)
+    }
+    func sendPhoto(chatID: Int64, path: String, caption: String) async throws {
+        try await service.sendPhoto(chatID: chatID, path: path, caption: caption)
+    }
+    func sendDocument(chatID: Int64, path: String, caption: String) async throws {
+        try await service.sendDocument(chatID: chatID, path: path, caption: caption)
+    }
+    func clearMediaCache() async throws { try await service.clearMediaCache() }
 
     func sendRemote(text: String, chatID: Int64, replyToRemoteID: Int64?) async throws -> Message? {
         try await service.sendText(chatID: chatID, text: text, replyToRemoteID: replyToRemoteID)

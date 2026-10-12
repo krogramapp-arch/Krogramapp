@@ -17,15 +17,17 @@ final class SessionStore: ObservableObject {
     @Published private(set) var phase: Phase = .welcome
     @Published private(set) var isBusy = false
     @Published var errorText: String?
+    @Published private(set) var sessionIssue: String?
 
     private let chats: ChatsViewModel
     private let privacy: PrivacyMode
     private let defaults: UserDefaults
     private var service: TelegramService?
     private var stepsTask: Task<Void, Never>?
+    private var restoringLiveSession = false
+    private var explicitLogoutRequested = false
 
     private static let credentialsKey = "tg.credentials"
-    private static let databaseKeyName = "tg.dbkey"
     private static let modeKey = "krochat.lastmode.v1"
 
     init(chats: ChatsViewModel, privacy: PrivacyMode, defaults: UserDefaults = .standard) {
@@ -34,22 +36,35 @@ final class SessionStore: ObservableObject {
         self.defaults = defaults
     }
 
-    var hasSavedCredentials: Bool { Self.loadCredentials() != nil }
+    var hasSavedCredentials: Bool { (try? Self.loadCredentials()) != nil }
 
     // MARK: Launch
 
     func bootstrap() async {
         switch defaults.string(forKey: Self.modeKey) {
         case "live":
-            if let credentials = Self.loadCredentials() {
-                startService(credentials)
-            } else {
-                phase = Self.initialSetupPhase(hasSavedCredentials: false)
+            restoringLiveSession = true
+            do {
+                if let credentials = try Self.loadCredentials() {
+                    startService(credentials, restoring: true)
+                } else {
+                    sessionIssue = L("session.credentialsUnavailable")
+                    errorText = sessionIssue
+                    phase = .login(.failed(sessionIssue ?? ""))
+                }
+            } catch {
+                sessionIssue = L("session.keychainUnavailable")
+                phase = .live
             }
         case "demo":
             await enterDemo()
         default:
-            phase = Self.initialSetupPhase(hasSavedCredentials: Self.loadCredentials() != nil)
+            do {
+                phase = Self.initialSetupPhase(hasSavedCredentials: try Self.loadCredentials() != nil)
+            } catch {
+                sessionIssue = L("session.keychainUnavailable")
+                phase = .credentials
+            }
         }
     }
 
@@ -57,14 +72,35 @@ final class SessionStore: ObservableObject {
         hasSavedCredentials ? .welcome : .credentials
     }
 
+    static func shouldClearLiveMode(afterClosedState explicitLogoutRequested: Bool) -> Bool {
+        explicitLogoutRequested
+    }
+
+    func retryConnection() {
+        guard restoringLiveSession || defaults.string(forKey: Self.modeKey) == "live" else { return }
+        do {
+            guard let credentials = try Self.loadCredentials() else {
+                sessionIssue = L("session.credentialsUnavailable")
+                return
+            }
+            startService(credentials, restoring: true)
+        } catch {
+            sessionIssue = L("session.keychainUnavailable")
+        }
+    }
+
     // MARK: Navigation between login steps
 
     func beginLogin() {
         errorText = nil
-        if let credentials = Self.loadCredentials() {
-            startService(credentials)
-        } else {
-            phase = .credentials
+        do {
+            if let credentials = try Self.loadCredentials() {
+                startService(credentials)
+            } else {
+                phase = .credentials
+            }
+        } catch {
+            errorText = L("session.keychainUnavailable")
         }
     }
 
@@ -92,8 +128,10 @@ final class SessionStore: ObservableObject {
             return
         }
         let credentials = TelegramCredentials(apiID: id, apiHash: hash.lowercased())
-        guard let data = try? JSONEncoder().encode(credentials),
-              (try? Keychain.set(data, for: Self.credentialsKey)) != nil else {
+        do {
+            let data = try JSONEncoder().encode(credentials)
+            try Keychain.set(data, for: Self.credentialsKey)
+        } catch {
             errorText = L("err.generic")
             return
         }
@@ -107,27 +145,77 @@ final class SessionStore: ObservableObject {
         objectWillChange.send()
     }
 
-    private static func loadCredentials() -> TelegramCredentials? {
-        guard let data = Keychain.get(credentialsKey) else { return nil }
+    private static func loadCredentials() throws -> TelegramCredentials? {
+        guard let data = try Keychain.get(credentialsKey) else { return nil }
         return try? JSONDecoder().decode(TelegramCredentials.self, from: data)
     }
 
-    private static func databaseKey() -> Data {
-        if let existing = Keychain.get(databaseKeyName) { return existing }
+    static func databaseKey(
+        read: () throws -> Data?,
+        write: (Data) throws -> Void,
+        random: (inout [UInt8]) -> OSStatus,
+        databaseExists: () throws -> Bool
+    ) throws -> Data {
+        if let existing = try read() { return existing }
+        let hasExistingDatabase = try databaseExists()
+        guard !hasExistingDatabase else { throw KeychainError.existingDatabaseKeyMissing }
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = random(&bytes)
+        guard status == errSecSuccess else { throw KeychainError.failed(status) }
         let key = Data(bytes)
-        try? Keychain.set(key, for: databaseKeyName)
+        try write(key)
         return key
+    }
+
+    private static func databaseKey() throws -> Data {
+        try databaseKey(
+            read: { try Keychain.get("tg.dbkey") },
+            write: { try Keychain.set($0, for: "tg.dbkey") },
+            random: { bytes in SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) },
+            databaseExists: {
+                let directory = FileManager.default
+                    .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("KroGram/tdlib", isDirectory: true)
+                do {
+                    return !(try FileManager.default.contentsOfDirectory(atPath: directory.path)).isEmpty
+                } catch {
+                    let nsError = error as NSError
+                    if nsError.code == NSFileReadNoSuchFileError { return false }
+                    throw error
+                }
+            }
+        )
     }
 
     // MARK: Telegram session
 
-    private func startService(_ credentials: TelegramCredentials) {
+    private func startService(_ credentials: TelegramCredentials, restoring: Bool = false) {
         teardown()
-        let newService = TelegramService(credentials: credentials, dbKey: Self.databaseKey())
+        let key: Data
+        do {
+            key = try Self.databaseKey()
+        } catch {
+            if let keychainError = error as? KeychainError,
+               case .existingDatabaseKeyMissing = keychainError {
+                sessionIssue = L("session.databaseKeyMissing")
+            } else {
+                sessionIssue = L("session.keychainUnavailable")
+            }
+            if !restoring { errorText = sessionIssue }
+            phase = restoring ? .live : .login(.failed(sessionIssue ?? ""))
+            return
+        }
+        sessionIssue = nil
+        explicitLogoutRequested = false
+        restoringLiveSession = restoring
+        let newService = TelegramService(credentials: credentials, dbKey: key)
         service = newService
-        phase = .connecting
+        if restoring {
+            chats.attach(TelegramChatRepository(service: newService))
+            phase = .live
+        } else {
+            phase = .connecting
+        }
         let steps = newService.authSteps
         stepsTask = Task { [weak self] in
             for await step in steps {
@@ -145,24 +233,47 @@ final class SessionStore: ObservableObject {
         isBusy = false
         switch step {
         case .starting:
-            phase = .connecting
+            if !restoringLiveSession { phase = .connecting }
+        case .databaseReady:
+            if restoringLiveSession { await chats.load() }
         case .ready:
             guard let service else { return }
             defaults.set("live", forKey: Self.modeKey)
             chats.attach(TelegramChatRepository(service: service))
             phase = .live
+            restoringLiveSession = false
+            sessionIssue = nil
             await chats.reload()
         case .closed:
-            teardown()
-            defaults.removeObject(forKey: Self.modeKey)
-            chats.attach(MockChatRepository())
-            phase = .welcome
+            if Self.shouldClearLiveMode(afterClosedState: explicitLogoutRequested) {
+                explicitLogoutRequested = false
+                restoringLiveSession = false
+                defaults.removeObject(forKey: Self.modeKey)
+                teardown()
+                chats.attach(MockChatRepository())
+                phase = .welcome
+            } else {
+                sessionIssue = L("session.connectionInterrupted")
+                if restoringLiveSession { phase = .live }
+            }
         case .failed(let message):
-            errorText = message
-            phase = .login(step)
+            if restoringLiveSession {
+                sessionIssue = message
+                phase = .live
+            } else {
+                errorText = message
+                phase = .login(step)
+            }
         case .waitPhone, .waitCode, .waitPassword, .unsupported:
             errorText = nil
-            phase = .login(step)
+            if restoringLiveSession, case .waitPhone = step {
+                restoringLiveSession = false
+                defaults.removeObject(forKey: Self.modeKey)
+                sessionIssue = L("session.terminated")
+                phase = .login(step)
+            } else if !restoringLiveSession {
+                phase = .login(step)
+            }
         }
     }
 
@@ -204,6 +315,12 @@ final class SessionStore: ObservableObject {
 
     func logOut() async {
         guard let service else { return }
-        await service.logOut()
+        explicitLogoutRequested = true
+        do {
+            try await service.logOut()
+        } catch {
+            explicitLogoutRequested = false
+            errorText = TGErrors.message(for: error)
+        }
     }
 }
