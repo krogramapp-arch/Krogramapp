@@ -1,196 +1,62 @@
-# KroGram: Master Task Brief for a Coding Agent
+Phase -1 is done on my side. Now start PHASE 0 ONLY: the advanced Backgrounds and Neon system. Do not start Phase A.
 
-## 0. How to read this brief
-- Work **phase by phase**. Do exactly ONE phase per pull request / round. Do not start the next phase until the owner confirms the build is green and the issues of the current phase are gone.
-- Start with **Phase -1** only. Before writing code: read the repository, then post (a) your root-cause diagnosis of each Phase -1 issue based on the actual code, and (b) a short plan. Then implement.
-- Never claim something works, builds, or passes tests unless you have real evidence (CI log, test output). State clearly what you could not verify.
+Before you write code
+1. Re-read the repo as it is now (your Phase -1 changes included) and `docs/ARCHITECTURE.md`.
+2. Post a short plan: files to add/modify, the data model for the new theme fields, and the build risks you expect.
+3. Phase -1 regression gate. Confirm in your report, with evidence, that these still hold after your Phase 0 changes: the app stays signed in when the network drops; chat list is paginated; avatars load on demand; own-profile card is the first Settings item. If any of these was not tested for real, say so.
 
-## 1. Project
-**KroGram** is an independent, unofficial Telegram client for iOS.
-- Swift / SwiftUI, iOS 17+, Swift 5.9 language mode.
-- Telegram access through **TDLib** via the `TDLibFramework` Swift package (JSON interface: `td_create_client_id`, `td_send`, `td_receive`, `td_execute`).
-- Project is generated with **XcodeGen** (`KroGram/project.yml`). No `.xcodeproj` is committed.
-- CI/build: **Codemagic** (`codemagic.yaml` in repo root; workflows: `KroGram - Build & Test`, `KroGram - Unsigned IPA`, `KroGram - Ad Hoc IPA`).
-- The owner works from an iPhone only (no Mac). Everything is verified through GitHub + Codemagic logs. Assume the owner cannot run Xcode.
-- Source layout (under `KroGram/KroGram/`): `App/`, `Core/`, `DesignSystem/` (Theme, Components, Effects), `Models/`, `Services/` (ChatRepository, ChatEvent, Commander), `Telegram/` (TDJSONClient, TelegramService, TelegramParsing, TelegramChatRepository, SessionStore, Keychain, PrivacyMode), `ViewModels/`, `Features/` (Auth, Chats, Contacts, Notifications, Organize, Settings, RootTabView), `Resources/{ar,en}.lproj/Localizable.strings`. Tests in `KroGram/KroGramTests/`.
-- Architecture notes live in `docs/ARCHITECTURE.md` (read it first).
+Rules that still apply (same as the master brief)
+- No compiler on your side: write code that compiles first time. Split complex SwiftUI expressions. Never use `.listRowBackground(.ultraThinMaterial)`; use `Rectangle().fill(.ultraThinMaterial)`. Grep the repo for every type/method before using it. No new packages.
+- ar + en strings for every new key, no duplicates. Unit tests for all new logic (they must compile).
+- Never claim success without CI evidence.
+- No account data, secrets or message content in themes, exports or logs.
 
-## 2. Product goal
-A **modified Telegram, not a radically different app.** The user must find the structure and behavior they know from the official app: tab layout, chat list, chat screen, settings, profile pages, folders, media, search. On top of that, KroGram adds its own identity:
-- Visual style: neon glow, glass/blur, transitions, custom themes and wallpapers, Arabic (RTL) and English.
-- Extras: Ghost privacy options, Commander local commands, manual local save of messages.
+Goal
+All UI colors (bubbles, header, composer, badges, avatars, buttons, tab bar) come from ONE theme engine (`KroTheme` / `ThemeStore`). No hard-coded neon colors inside screens. Neon keeps its levels (Off / Balanced / Full) and is lowered automatically with Reduce Motion and Low Power Mode. Keep Telegram's layout and behavior; only the visual layer changes.
 
-Principle: **behavior and navigation follow Telegram; the visual identity and extras are KroGram's.** Do not reinvent where features live; mirror Telegram's information architecture and change only the look.
+1) Background types
+- Solid; gradient (2-5 colors, angle, linear/radial/angular); animated aurora (blob count, speed, size, blur); mesh gradient with draggable points; patterns (dots, lines, grid, geometric; density + opacity); photo from the user's library (crop/move, blur 0-100%, dim, saturation, optional light parallax).
+- At least 10 ready-made backgrounds drawn in code (SwiftUI/Canvas). No images or assets taken from Telegram.
+- Scope: global, per chat type (private/groups/channels), per single chat. The most specific wins.
+- Telegram's own chat background (`setChatBackground`) is optional, separate, and changed only after explicit confirmation. Local backgrounds are never sent anywhere.
 
-Main navigation follows Telegram iOS: Contacts, Calls (only if supported), Chats, Settings, with an unread badge. KroGram-only screens (Organize, Notifications summary, Commander, etc.) move inside Settings or folders instead of being separate tabs.
+2) Automatic neon from the background
+- On background change, extract the dominant color ON-DEVICE only (downscale, then cluster) and derive a harmonious neon color (shift in HSL/OKLCH, do not just copy the color).
+- Modes: Auto (follows background), Manual (user fixed color), Hybrid (auto plus offsets for hue/saturation/brightness).
+- Readability guarantee: text contrast against the bubble background >= 4.5:1. If it fails, adjust the color or add a light scrim automatically. Neon must never make text unreadable.
+- Pick neon separately for light and dark appearance when needed.
 
-## 3. Hard rules
+3) Neon Studio screen (inside Settings > Appearance)
+- Per element, switchable and individually colorable: outgoing bubbles, incoming bubbles, header, composer, send button, unread badges, avatars, cards, primary buttons, tab bar.
+- Per element: color or two-color gradient, intensity, glow radius, layers (1-4), spread, opacity, glowing border (width/color), pulse (speed/amplitude), breathing, slow hue rotation, touch reaction.
+- Presets: Cyber, Pastel, Fire, Ice, Pure OLED Black, Calm (no glow). Presets can be duplicated, edited and saved.
+- Live preview on the same screen (sample bubbles, header, composer) and a Reset button per section.
+- Safety caps: max intensity, layers and glow area; at most one heavy animated effect per screen; all motion off with Reduce Motion.
 
-### 3.1 Build-safety (no compiler is available to you; code must compile on the first try)
-- Break complex SwiftUI expressions into small computed properties/functions. A previous build failed with "the compiler is unable to type-check this expression in reasonable time".
-- Do NOT use `.listRowBackground(.ultraThinMaterial)` (Material is not a `View`). Use `.listRowBackground(Rectangle().fill(.ultraThinMaterial))`.
-- Before using any type, method, or property, `grep` the repo to confirm it exists and check its signature.
-- Verify every TDLib request/field name against the official TDLib documentation (https://core.telegram.org/tdlib/docs/). Do not guess field names.
-- Do not add third-party packages without stating the reason, license, size, and CI impact, and getting approval.
-- Every new user-facing string needs keys in BOTH `ar.lproj` and `en.lproj`, with no duplicates and no missing keys.
-- Add unit tests for all new logic. Tests must compile (the test target is built by `Build & Test`).
-- Keep `@MainActor` / actor isolation consistent. Do not introduce new Swift concurrency warnings that become errors in Swift 6 mode if avoidable.
+4) Storage and sharing
+- All settings are Codable fields in `KroTheme` with a schema version and a migration from the current version. Existing user themes must survive.
+- JSON export/import keeps the current validation (size limit, count limit, color-format check, clamped ranges, fresh IDs on import).
+- Background photos stay local (Application Support, file protection), downscaled (max about 2048 px), excluded from export by default, never uploaded. Exporting with the image is optional and confirmed.
 
-### 3.2 Security and privacy
-- No `api_id`, `api_hash`, login codes, passwords, or session data in source, logs, or GitHub. Secrets only in Keychain.
-- Never log passwords, verification codes, session data, or message content.
-- No user data is sent to any server other than Telegram. Any external service (translation, AI) must be optional, off by default, and clearly disclosed.
-- Do not claim regular chats are end-to-end encrypted. Only Secret Chats are.
-- Keep the visible notice: "independent, unofficial client".
+5) Performance
+- TimelineView at 24 fps or less for motion; cache rendered backgrounds; `drawingGroup` where it helps. No full redraw per frame.
+- Test with a long chat list and a long chat; if effects must be reduced, do it automatically and tell the user.
+- VoiceOver and Dynamic Type must work on every background.
 
-### 3.3 Things that must NOT be implemented (do not build, do not ask to build)
-- Automatic saving of other people's deleted messages.
-- Saving self-destructing media.
-- Bypassing protected-content restrictions (save/forward limits), bans, privacy settings, or Telegram rate limits.
-- Unlocking Premium, Stars, gifts, or payments without a real payment through Telegram. No faked subscription state and no fake payment UI.
-- Mass-sending or automated behavior that violates Telegram API terms.
-- Allowed instead: a **manual, user-initiated local save** of a specific message (already started via `SavedStore`).
-
-### 3.4 Ownership and licensing
-- Do NOT copy code or assets from the official Telegram-iOS app (GPL). No Telegram icons, stickers, sounds, or logos. Use SF Symbols and original assets. Write code from scratch on top of TDLib.
-- The app name stays KroGram.
-- If TDLib or Telegram does not support a feature, mark it clearly as unsupported in the UI and in the docs. Do not fake it visually.
-
-### 3.5 Telegram API behavior
-- Show FloodWait / 429 errors with the number of seconds. Never auto-retry without a bound.
-
-## 4. Phases (do them in order)
-
-### Phase -1: Critical bug fixes (deliver and test alone, before any new feature)
-These are real symptoms seen by the owner. For each, find the **root cause in the actual code first** and report it. Do not guess.
-
-**1) The app logs out of all sessions when the internet drops (and may delete data)**
-- Losing the network must NEVER end the session. It is only a connection state (waiting for network / connecting / updating). The user stays inside the app and sees cached chats from the local TDLib database.
-- Logout may happen only (a) when the user explicitly taps Log out and confirms, or (b) when Telegram servers really terminate the session (the corresponding TDLib authorization state), with a clear explanation to the user.
-- Audit every path that can send the user back to the login screen: handling of `authorizationStateClosed`, rebuilding `TelegramService`, removal of the "last mode" key, TDLib start failures while offline, and any `catch` that treats an arbitrary error as a logout (see `SessionStore.handle`, `startService`, `bootstrap`, `TelegramService`). Fix them so nothing is wiped without an explicit decision.
-- Verify the TDLib database and files live in a persistent directory (Application Support), not Caches or tmp. Verify the database encryption key in Keychain is stable: it must not be regenerated, and a Keychain read/write failure must never lead to deleting the database.
-- Delete local data (database, files, drafts, saved messages, settings) only on an explicit, confirmed logout, ideally with a "keep my local data" option where possible.
-- Required scenarios (document the results): airplane mode on launch; losing the network during use and getting it back; closing and reopening the app offline; device restart. In all of them the user stays signed in. Add unit tests for the session state machine (disconnect != logout).
-
-**2) Media is not supported**
-- Build the minimum working media support now, before the rest of Phase A: render photos, stickers, files, audio, video; download with progress and cancel; send a photo and a file from the device; a size-limited cache with a clean-up action. Anything still unsupported must show a clear "not supported in this version" card, never empty text.
-
-**3) User/chat photos are not shown**
-- Show avatars for users, groups and channels through TDLib files: the small chat photo, downloaded on demand, refreshed when the file changes, with a bounded in-memory cache and a stable-color initials placeholder while loading or when absent.
-- Do NOT download avatars for all chats at once; only for what is on screen.
-
-**4) All chats load at once (heavy on the device)**
-- Paginate: first batch about 20-30 chats, then load more while scrolling, following TDLib's chat-list order until exhausted.
-- Load message history only for the open chat, in pages (about 30-50 messages), loading older messages when scrolling up. Do not keep the history of every chat in memory; enforce per-chat and global caps on in-memory messages.
-- Coalesce rapid update events and apply them in batches instead of rebuilding the list on every event. Avoid linear work over all chats on each update.
-- Use lazy containers (`LazyVStack` / `List`) and keep heavy computation out of `body`.
-- Verification: use an account with hundreds of chats; report memory, CPU and time-to-first-render before and after, with real numbers.
-
-**5) No visible profile for the user's own account**
-- The first item in Settings is a "my account" card as in Telegram: my photo, name, phone number, username, bio, and an Edit button, leading to a full profile screen.
-- Opening a user/group/channel from the chat header shows a profile screen: photo, name, status, description, shared media, and actions (mute, block, search).
-- Data comes from TDLib (`getMe` and related calls). Keep it in memory for display only; never write it to logs.
-
-**Phase -1 execution order:** (1) auto-logout, (2) avatars, (3) own profile, (4) paginated loading, (5) basic media. After each item write a short note: root cause, what changed, how it was tested. Do not start Phase 0 until the owner confirms that all five issues are gone on their device.
-
-### Phase 0: Advanced backgrounds and neon system (build before the other feature phases, it touches every screen)
-
-Design rule: all UI colors (bubbles, header, composer, badges, avatars, buttons) are read from ONE theme engine (`KroTheme` / `ThemeStore`). No hard-coded neon colors inside screens. Neon keeps its levels (Off / Balanced / Full) and is lowered automatically with Reduce Motion and Low Power Mode.
-
-**0.1 Background types**
-- Solid color.
-- Gradient (2 to 5 colors, angle, linear / radial / angular).
-- Animated aurora (blob count, speed, size, blur strength).
-- Mesh gradient with draggable color points.
-- Patterns (dots, lines, grid, geometric) with adjustable density and opacity.
-- Photo from the user's library: crop and move, blur 0-100%, dim, saturation, optional light parallax.
-- At least ten ready-made backgrounds drawn in code (SwiftUI / Canvas), not images taken from Telegram.
-- Scope: global; per chat type (private / groups / channels); per single chat. The most specific wins.
-- The official Telegram chat background (`setChatBackground`) is optional, separate, and changed only after explicit confirmation. Local backgrounds are never sent to anyone.
-
-**0.2 Automatic neon from the background**
-- When the background changes, extract a dominant color on-device only (downscale the image, then cluster), and derive a harmonious neon color (shift in HSL/OKLCH rather than copying the color).
-- Modes: Auto (neon follows the background), Manual (user fixes the color), Hybrid (auto plus adjustable offsets for hue, saturation, brightness).
-- Readability guarantee: bubble text contrast against its background must be at least 4.5:1; if it fails, adjust the color or add a light scrim automatically. Neon must never make text unreadable.
-- Choose the neon separately for light and dark appearance when the background differs.
-
-**0.3 Neon Studio (advanced custom control screen)**
-- Per element, each switchable and individually colorable: outgoing bubbles, incoming bubbles, header, composer, send button, unread badges, avatars, cards, primary buttons, tab bar.
-- Parameters per element: color (or two-color gradient), intensity, glow radius, layers (1-4), spread, opacity, glowing border (width, color), pulse (speed, amplitude), breathing, slow hue rotation, touch reaction.
-- Presets: Cyber, Pastel, Fire, Ice, Pure OLED Black, Calm (no glow). Every preset can be duplicated, edited and saved.
-- Live preview on the same screen (sample bubbles, header, composer) while editing, with a Reset button per section.
-- Safety caps: maximum intensity, layers and glow area for performance and battery; no more than one heavy animated effect per screen; all motion disabled with Reduce Motion.
-
-**0.4 Storage and sharing**
-- All background/neon settings are `Codable` fields in `KroTheme` with a schema version and a migration from older versions, without losing the user's existing themes.
-- JSON export/import with the existing validation: size limit, count limit, color-format check, values clamped to their ranges, fresh IDs on import.
-- Background photos are stored locally only (Application Support, file protection), downscaled (for example max 2048 px), excluded from export by default, and never uploaded. Exporting with the image is optional and confirmed.
-- Settings contain no account data.
-
-**0.5 Performance and quality**
-- No full redraw per frame: use `TimelineView` at a limited rate (24 fps or less) for motion, cache rendered backgrounds, use `drawingGroup` where it helps.
-- Measure on long lists; if effects must be reduced, do it automatically and tell the user.
-- VoiceOver, Dynamic Type and accessibility settings must work with every background.
-
-**0.6 Required tests**
-- Dominant-color extraction and neon derivation (expected values for simple test images).
+6) Required tests
+- Dominant-color extraction and neon derivation (simple test images with expected values).
 - Contrast guarantee (pass and fail cases).
 - Migration of old themes; export/import of valid, invalid and extreme-value JSON.
 - Scope precedence (chat > type > global).
 - Safety caps for intensity and layers.
 
-**Phase 0 deliverables:** suggested new files `DesignSystem/Wallpaper.swift`, `DesignSystem/NeonStyle.swift`, `DesignSystem/ColorExtraction.swift`, `Features/Settings/NeonStudioView.swift`, `Features/Settings/WallpaperPickerView.swift`, plus their tests; and an "option -> scope -> allowed values" table in `docs/ARCHITECTURE.md`.
-
-### Phase A: Core chat
-- Messages: formatted text (bold, italic, code, quote, spoiler, links, mentions) via text entities; reply, forward, edit, delete, pin, multi-select, drafts.
-- Media: photos, video, files, audio, voice messages, video notes, stickers, GIFs, locations, contacts, polls. Download with progress, cancel, and a storage cap.
-- Real reactions, typing indicator (respecting Ghost), in-chat search, paginated history.
-
-### Phase B: Lists and organization
-- Full chat list, real chat folders (synced through TDLib), archive, pin, mute, global search, contacts, Saved Messages.
-- Groups, supergroups, channels, bots, Topics (forums), admins/permissions/invites, report and block.
-- Scheduled messages, silent messages, timed messages.
-
-### Phase C: Social content
-- Stories: view, post, replies, privacy, archive.
-- Channels: comments, statistics (where TDLib provides them), views.
-- Stickers and custom emoji: pack store, favorites, recents, create a pack (if TDLib allows).
-- Web Apps / Mini Apps in an isolated `WKWebView`; inline bots; inline keyboards.
-
-### Phase D: Account and settings (every Telegram settings section)
-- Profile (name, bio, username, photo, birthday), phone number, emoji status.
-- Privacy and security: last seen, photo, bio, calls, groups, blocked users, two-step verification, passcode, active sessions, auto-delete account.
-- Notifications and sounds per chat type.
-- Data and storage: network usage, auto-download, clear cache, storage limits.
-- Appearance: themes, chat backgrounds (through the Phase 0 system and Neon Studio), text size, dark mode, app icons.
-- Language, folders, devices, proxy (Proxy / MTProto), FAQ, about.
-- Multiple isolated accounts (separate database and Keychain key per account).
-- Full login: phone, code, 2FA, QR, new account, email confirmation.
-
-### Phase E: Calls and Secret Chats
-- Secret Chats with a real encryption indicator and self-destruct timer (respected, never bypassed).
-- Voice/video calls and voice chats: evaluate feasibility first. If they need WebRTC/tgcalls that `TDLibFramework` does not provide, explain it and do NOT ship a broken feature.
-
-### Phase F: Telegram economy and services
-- Stars, gifts, Premium, Telegram Business (quick replies, working hours, greeting messages, chatbots): show the real account state and only what TDLib exposes. Do not imitate purchases or bypass payment. If a purchase needs StoreKit, explain the requirements and do not implement without approval.
-- Wallet and payments: show only what is officially supported; never store card data or keys.
-
-### Phase G: KroGram-specific features
-- Ghost: no read receipts, no typing indicator, do not appear online. These only control what this client sends about the account.
-- Commander: safe local commands.
-- Manual local save of messages and export, Face ID lock for hidden chats, on-device translation, Focus profiles, local quick replies.
-- Themes, backgrounds and neon: implemented in Phase 0 and only used here.
-
-### Phase H: Production
-- Push notifications: TDLib alone cannot receive background push. Explain the options (APNs needs a server and an Apple Developer account) and the safe alternative. Do not claim support that does not exist.
-- UI tests, performance and memory, VoiceOver and Dynamic Type, license and privacy review, signing and TestFlight.
-
-## 5. Deliverables for every phase
-- A pull request with a clear list of added/modified files, and a summary of what is done and what was deferred and why.
-- Updated `README.md` and `docs/ARCHITECTURE.md`, including a table "Feature -> Status (implemented / partial / unsupported + reason)".
+Deliverables
+- Suggested new files: DesignSystem/Wallpaper.swift, DesignSystem/NeonStyle.swift, DesignSystem/ColorExtraction.swift, Features/Settings/NeonStudioView.swift, Features/Settings/WallpaperPickerView.swift, plus their tests.
+- Update README.md and docs/ARCHITECTURE.md with an "option -> scope -> allowed values" table and the feature status table.
 - A short list of expected build risks and what to watch for in the Codemagic log.
-- If the owner pastes build errors, fix ALL of them in one round and push again.
-- Do not touch secrets, signing material, or `codemagic.yaml` signing settings without being asked.
+- If I paste build errors, fix ALL of them in one round.
 
-## 6. Start now
-Begin with **Phase -1 only**. First post your root-cause diagnosis (from reading the actual code) for the five issues, then your short plan, then implement. Phase 0 and Phase A come after the owner confirms the build is green and the five issues are gone.
+Order inside Phase 0 (one commit each, with a short note per step)
+(1) theme model + migration + tests, (2) background renderer + presets, (3) color extraction + neon derivation + contrast guard, (4) Neon Studio + Wallpaper picker UI, (5) per-scope assignment, (6) export/import + performance caps.
+
+Start by posting the plan. Stop after Phase 0. Phase A comes only after I confirm the build is green.
