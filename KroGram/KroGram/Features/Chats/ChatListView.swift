@@ -187,7 +187,7 @@ struct ChatListView: View {
         NavigationLink(value: chat.id) {
             ChatRow(chat: chat, draft: vm.draft(for: chat.id))
         }
-        .listRowBackground(.ultraThinMaterial)
+        .listRowBackground(Rectangle().fill(.ultraThinMaterial))
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if vm.canDeleteChats {
                 Button(role: .destructive) {
