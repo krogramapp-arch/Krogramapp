@@ -1,273 +1,45 @@
-
-# KroGram: All Remaining Prompts (Phases B to H)
-
-How to use
-- Paste the COMMON RULES block once at the start of the agent thread (or keep it in the repo as `docs/AGENT_RULES.md` and tell the agent to read it every round).
-- Then paste ONE phase prompt per round, in order. Do not paste the next phase until the build is green and the current phase works on your device.
-- Already given separately: Phase -1, Phase 0, Phase A.
-
----
-
-## COMMON RULES (apply to every phase)
-
-Project: KroGram, an independent, unofficial Telegram client for iOS (Swift/SwiftUI, iOS 17+, Swift 5.9 mode) on TDLib via `TDLibFramework`. XcodeGen (`KroGram/project.yml`), Codemagic (`codemagic.yaml`). The owner works from an iPhone only and verifies through GitHub + Codemagic logs.
-
-Product goal: a modified Telegram, not a different app. Behavior and navigation follow Telegram on iOS; the visual identity (neon, glass/blur, themes, backgrounds, Arabic RTL + English) and extras (Ghost, Commander, local manual save) are KroGram's. KroGram-only screens live inside Settings or folders, not as extra main tabs. All colors come from the theme engine (`KroTheme` / `ThemeStore`); no hard-coded neon in screens.
-
-Round discipline
-1. Read the repo as it is now and `docs/ARCHITECTURE.md`. Post a short plan and expected build risks before code.
-2. Do exactly ONE phase per round, in the listed order of steps, one commit per step with a short note (design/root cause, what changed, how tested).
-3. Never claim something works, builds or passes tests without real evidence (CI log, test output). State what you could not verify.
-4. No fake code and no screens that look working but are not wired. Unsupported = hidden or a clear "not supported in this version" card.
-5. Regression gate at the start of every phase: confirm signed-in state survives network loss, chat list and history stay paginated, avatars load on demand, memory caps still hold. If untested, say so.
-
-Build safety (no compiler on your side; code must compile the first time)
-- Split complex SwiftUI expressions into small properties/functions.
-- Never `.listRowBackground(.ultraThinMaterial)`; use `Rectangle().fill(.ultraThinMaterial)`.
-- Grep the repo for every type/method before using it. Verify every TDLib request/field name against the official TDLib docs. No new packages without stating reason, license, size and CI impact, and getting approval.
-- Every new string in BOTH `ar.lproj` and `en.lproj`, no duplicates/missing keys. Unit tests for all new logic; tests must compile.
-
-Security and privacy
-- No `api_id`, `api_hash`, login codes, passwords or session data in source, logs or GitHub; secrets only in Keychain. Never log message content, codes or session data.
-- No user data to any server other than Telegram. External services (translation, AI) are optional, off by default, disclosed.
-- Do not claim regular chats are end-to-end encrypted; only Secret Chats are.
-- Keep the visible "independent, unofficial client" notice. Do not copy code or assets from Telegram-iOS (GPL) or Telegram's icons/stickers/sounds/logos; use SF Symbols and original assets.
-- Show FloodWait/429 with the seconds; never retry without a bound.
-
-Hard limits (never build, never work around)
-- Automatic saving of deleted messages; saving self-destructing media; bypassing protected content, bans, privacy settings or rate limits.
-- Unlocking Premium/Stars/gifts/payments without a real payment through Telegram; fake subscription state or fake payment UI.
-- Mass-sending or automation that violates Telegram's API terms.
-- Allowed: manual, user-initiated local save of a chosen message.
-
-Per-phase deliverables
-- Update `README.md` and `docs/ARCHITECTURE.md` with a "Feature -> Status (implemented / partial / unsupported + reason)" table.
-- A short list of expected build risks and what to watch in the Codemagic log. If the owner pastes build errors, fix ALL of them in one round.
-- Stop at the end of the phase.
-
----
-
-## PROMPT B: Lists and organization
-
-```
-Phase A is done on my side. Start PHASE B ONLY. Apply the COMMON RULES.
-
-Gate: re-read the repo; confirm Phase A items exist and are wired (formatted text, forward/pin/multi-select, real reactions, media types, search, composer). List anything missing and finish it first in a separate commit. Post the plan.
-
-Scope
-
-B1) Chat list completeness
-- Real chat folders (TDLib chat folders, synced with the account) replacing the local-only folders: list, create, edit (included chats, types, excluded), reorder, delete, folder tabs/chips with unread counts. Keep the existing local "hide" feature but label it clearly as local only.
-- Archive (real, with its own entry at the top of the list like Telegram), pin (respect Telegram's pin limits and show the error), mute (durations), mark unread/read, clear history, delete chat (confirm; real TDLib delete).
-- Global search: chats, contacts, public usernames, messages across chats (paginated), recent searches (local, clearable).
-- Saved Messages as a normal chat with its own icon, plus the existing manual local save kept separate and labeled.
-
-B2) Chat types
-- Groups, supergroups, channels, bots, forum Topics (topic list inside a forum chat, open a topic, create/close where permitted), channel post views.
-- Members list (paginated), admin list, permissions display, invite links (view, copy, revoke where permitted), join by link, leave.
-- Report (with reason), block/unblock users, restrict/ban where the account is an admin and TDLib allows it. Never offer actions the account lacks rights for; read rights from TDLib.
-
-B3) Scheduling and timers
-- Scheduled messages (Telegram's own scheduled messages): schedule from the composer, list, edit time, send now, delete.
-- Silent messages, auto-delete timer per chat (set/clear; display the timer indicator), self-destruct display where TDLib reports it (respected, never bypassed).
-
-B4) Contacts
-- Contacts list from TDLib (paginated, sectioned), add contact by phone/username, edit/delete contact, invite flow. Contacts sync from the phone book only with explicit permission and a clear explanation.
-
-Order (one commit each): B1 folders+archive+pin+mute, B1 search, B2 group/channel info + members, B2 topics, B3 scheduled + timers, B4 contacts.
-
-Deliverables: tests for folder mapping, pin-limit errors, permission gating, search pagination; the status table; build-risk list. Stop after Phase B.
-```
-
----
-
-## PROMPT C: Social content
-
-```
-Phase B is done on my side. Start PHASE C ONLY. Apply the COMMON RULES.
-
-Gate: re-read the repo; confirm Phase B is wired. Post the plan. Before coding each item, check what TDLib exposes. Anything TDLib does not expose, or needs a native library we do not have, is marked "unsupported" with the reason; do not fake it.
-
-Scope
-
-C1) Stories
-- Stories row above the chat list (collapsible like Telegram), viewer with progress bars, tap navigation, reply, reactions, pause on hold, mute. Paginated/lazy: load only visible stories' media.
-- Post a story (photo/video from library, caption, privacy: everyone / contacts / close friends / selected), active stories management, archive, view list for own stories where allowed. Respect expiry. Never save others' stories to disk automatically; manual share only where the story allows it.
-
-C2) Channels
-- Comments (discussion thread) on channel posts, post views counter, forwards counter, reactions on posts, signatures, silent posts for admins, channel statistics where TDLib returns them (show a clear message when not available).
-
-C3) Stickers and emoji
-- Sticker panel in the composer: recents, favorites, installed sets, trending/featured sets, set preview and add/remove, search. Custom emoji display inside text and a custom-emoji picker.
-- Rendering: static WebP and WebM where AVFoundation can; for animated TGS (Lottie) check whether a safe renderer exists without a new package. If not, show the static preview + note and ask me before adding any package (state license and size).
-- Create sticker pack: only if TDLib supports it end to end; otherwise mark unsupported.
-
-C4) Bots and web apps
-- Inline keyboards (callback, URL, switch-inline), reply keyboards, bot menu button, bot commands list, inline mode (@bot query results).
-- Web Apps / Mini Apps in an isolated `WKWebView` (no shared cookies, no file access, limited JS bridge, non-persistent data store, explicit permission prompts, clear title bar with close and the bot name, block navigation outside https). Never inject the user's Telegram session or secrets. Show a one-time warning that the mini app is third-party.
-
-Order: C3 stickers (most used), C4 bots, C2 channels, C1 stories.
-
-Deliverables: tests for keyboard parsing, WebView policy (allowed/blocked URLs), sticker set mapping, story expiry; status table; risk list. Stop after Phase C.
-```
-
----
-
-## PROMPT D: Account and settings
-
-```
-Phase C is done on my side. Start PHASE D ONLY. Apply the COMMON RULES.
-
-Gate: re-read the repo; confirm Phase C is wired. Post the plan. The Settings screen must mirror Telegram's structure (my profile card first, then sections), styled with KroGram's theme. KroGram-only options (Ghost, Commander, Neon Studio, Wallpaper, local saved messages) live in their own clearly labeled sections.
-
-Scope
-
-D1) Profile
-- Edit profile: first/last name, bio, username (availability check), profile photo (pick, crop, set, remove), birthday, emoji status. Phone number change flow (verification code) only if TDLib supports it fully; otherwise unsupported.
-- Show only data the API returns; never cache or log the phone number outside the in-memory display.
-
-D2) Privacy and security
-- Privacy rules via TDLib user privacy settings: phone number, last seen, profile photo, bio, calls, groups/channels invites, forwarded messages, with "who can / cannot" lists.
-- Blocked users list, two-step verification (set, change, remove, recovery email), app passcode lock with Face ID/Touch ID (local, uses Keychain/LocalAuthentication; auto-lock timer; blur in the app switcher), active sessions list and terminate one/all others, auto-delete account period, sensitive content setting where TDLib exposes it.
-- Never show or store the 2FA password; never log codes.
-
-D3) Notifications and sounds
-- Per chat type notification settings (private/groups/channels): enable, preview, sound, exceptions list. Local-notification limits: explain that real background push needs a server (see Phase H); do not claim otherwise.
-
-D4) Data and storage
-- Storage usage breakdown (TDLib storage statistics), clear cache by category, cache limit, auto-download rules per network (Wi-Fi/cellular) and per media type, network usage statistics, proxy (SOCKS5 / MTProto) add/edit/enable with connection test.
-
-D5) Appearance and language
-- Wire the Phase 0 systems into Settings > Appearance (themes, wallpapers, Neon Studio), text size, dark/light/auto, app icon alternatives (only icons I provide), app language (ar/en) follow-system with an in-app hint.
-
-D6) Devices, folders, help
-- Devices (sessions), chat folders management entry, FAQ/about with the unofficial-client notice and licenses list (TDLib, other third-party code).
-
-D7) Multiple accounts
-- Isolated accounts: separate TDLib database directory and Keychain key per account, account switcher in Settings and by long-press on the profile card, add/remove account, logout per account, notification/badge counts per account. Never mix data between accounts; deleting one account removes only its own data after confirmation.
-
-D8) Login completeness
-- Phone, code, 2FA, resend code/call, QR login, new account registration (name; terms-of-service acceptance), email setup/confirmation when requested, recovery by email. Handle FloodWait with seconds. Keep the session-persistence guarantees from Phase -1 for every flow.
-
-Order: D1, D2 (passcode + sessions first), D4, D5, D3, D7, D8, D6.
-
-Deliverables: tests for privacy-rule mapping, passcode state machine (lock/unlock/timeout), account isolation (paths and keys), storage-limit logic; status table; risk list. Stop after Phase D.
-```
-
----
-
-## PROMPT E: Secret chats, calls
-
-```
-Phase D is done on my side. Start PHASE E ONLY. Apply the COMMON RULES.
-
-Gate: re-read the repo; confirm Phase D is wired. Post a FEASIBILITY REPORT first, before any call code, and wait for my answer on the call part.
-
-E1) Secret Chats (implement)
-- Create/open secret chats through TDLib, show a clear lock indicator and the encryption key visualization (key image/fingerprint as TDLib provides), self-destruct timer (set and display; always respected; screenshots notification display if TDLib reports it), device-bound behavior clearly explained, no cloud sync notice.
-- Secret chats must NOT be searchable via the global index, not included in any export or local-saved list, and not mirrored in notifications content when the privacy setting hides previews.
-- Do not claim that regular chats are end-to-end encrypted anywhere in the UI.
-
-E2) Calls and voice chats (feasibility first)
-- Determine whether voice/video calls and group voice/video chats can be done with `TDLibFramework` alone. TDLib handles signaling; the media layer needs WebRTC / tgcalls, which is not part of TDLibFramework.
-- Report: what is possible, which library would be needed (name, license, size, maintenance, App Store implications), and the CI build cost. Recommend one of: (a) skip calls, hide the Calls tab, show calls in chat history as read-only service messages; (b) add the library in a separate approved phase.
-- Implement only (a) now: display call service messages (duration, missed, declined) in chats and a Calls history list if TDLib exposes it; incoming-call notice with "answer in the official Telegram app" guidance. No fake call UI.
-
-Deliverables: tests for secret-chat state and timer logic; status table; the feasibility report as `docs/CALLS_FEASIBILITY.md`. Stop after Phase E.
-```
-
----
-
-## PROMPT F: Telegram economy and services
-
-```
-Phase E is done on my side. Start PHASE F ONLY. Apply the COMMON RULES, especially the hard limits about payments and Premium.
-
-Gate: re-read the repo; confirm Phase E is wired. Post the plan. For every item below, the rule is: show the real state and use only what TDLib officially exposes. Do not imitate purchases, do not unlock anything locally, do not fake balances, and do not build fake payment screens.
-
-F1) Premium status
-- Show whether the account is Premium (from TDLib), the features that depend on it, and an "open in Telegram" path to subscribe. No local unlocking, no pretending a feature works if the server refuses it; show Telegram's own error.
-
-F2) Stars and gifts
-- Show the real Stars balance and transactions list if TDLib provides them; show received/sent gifts in a profile where available; sending gifts or buying Stars is a payment flow: do NOT implement. Explain that it needs StoreKit/Apple rules and ask me first, with the requirements listed.
-
-F3) Telegram Business (for accounts that have it)
-- Quick replies, greeting/away messages, business hours, chat links: show and edit through TDLib's business APIs only when the account has the feature; otherwise show it as unavailable with the reason. No automation beyond what the API provides.
-
-F4) Wallet and payments
-- Only what is officially exposed in TDLib (invoices in chats rendered as messages, payment forms through Telegram's own flow in a web view). Never store card data, tokens or keys; no custom payment UI.
-
-F5) Local safety
-- A clear "Premium/Stars are controlled by Telegram" note in these screens.
-
-Deliverables: status table (every item: implemented / read-only / unsupported + reason); tests for state mapping (premium on/off, feature unavailable); risk list. Stop after Phase F.
-```
-
----
-
-## PROMPT G: KroGram-specific features
-
-```
-Phase F is done on my side. Start PHASE G ONLY. Apply the COMMON RULES.
-
-Gate: re-read the repo; confirm Phase F is wired. Post the plan. These features are KroGram's own layer on top of the Telegram-like app. Keep their entries inside Settings (section "KroGram"), not as main tabs.
-
-G1) Ghost (privacy options for what this client sends)
-- Options: do not send read receipts (manual "mark as read" button/long-press), hide typing indicator, do not appear online, optional "read without opening" preview of the last message from the chat list without marking read (only if it can be done without sending read receipts; verify with TDLib behavior before promising).
-- Honest note in the UI: these only control what this client sends; another app or a sent message can still show activity. Per-chat overrides allowed. Do not manipulate server-side privacy settings behind the user's back.
-
-G2) Commander (local commands)
-- Keep the safe local command set (calc, text tools, info, local games, chat actions). Add a help panel and per-command toggles. Never execute remote code, never run user-supplied scripts, never send automatic replies on the user's behalf.
-
-G3) Manual local save
-- Long-press a message > "Save locally" (text and, for media the user can already save, the file reference). Saved list with search, tags, delete, export (share sheet). Stored on device with file protection, capped, never uploaded. Not available for protected chats or secret chats' restricted content. No automatic saving of any message.
-
-G4) Hidden chats
-- Hide chats locally behind Face ID/passcode. Make clear it is a local view filter only, and that notifications may still show unless the user disables previews.
-
-G5) Translation
-- On-device translation using Apple's Translation framework where available (iOS 17.4+/18 APIs; check availability and fall back to "not available on this iOS"). Per-message translate and per-chat auto-translate toggle. No text leaves the device. If an external translation service is ever offered, it must be optional, off by default, and clearly disclose what is sent.
-
-G6) Focus profiles and quick replies
-- Focus profiles: named presets that filter which chats/folders show and which notifications are allowed, switchable manually and optionally by schedule. Quick replies: local canned snippets with shortcuts, inserted into the composer only when the user chooses (never auto-sent).
-
-G7) Optional AI assistant (only if I confirm I want it)
-- Opt-in, off by default, my own API key stored in Keychain, a clear per-use confirmation showing exactly what text will be sent and where. Never send chats automatically. Ask me before building this.
-
-Order: G1, G3, G4, G2, G5, G6.
-
-Deliverables: tests for Ghost state logic (no receipt sent when enabled), save-cap logic and protected-chat gating, hidden-chat lock state, focus-profile filtering; status table; risk list. Stop after Phase G.
-```
-
----
-
-## PROMPT H: Production
-
-```
-Phase G is done on my side. Start PHASE H ONLY. Apply the COMMON RULES.
-
-Gate: re-read the repo; confirm Phase G is wired. Post the plan.
-
-H1) Push notifications (decide with me)
-- TDLib alone cannot receive background push. Real push needs APNs plus a server that connects to Telegram's push registration (`registerDevice`), and an Apple Developer account with the Push capability. Write `docs/PUSH_OPTIONS.md` with the options: (a) no background push (messages arrive when the app is open or via background refresh, honest limitations), (b) own server relay (privacy, hosting and security implications: it would hold device tokens and push payloads; state the risk clearly), (c) local notifications from background tasks where iOS allows. Recommend one, do not build a server without my approval, and never claim push works if it does not.
-
-H2) Quality
-- UI tests for the critical flows (login screens, chat open/send, settings navigation, offline behavior), snapshot-free and stable on CI. Run on the simulator in Codemagic.
-- Performance: measure memory, CPU and time-to-first-render with hundreds of chats and a long history; report numbers before/after; fix regressions. Add a debug-only performance overlay (off in release).
-- Accessibility: VoiceOver labels everywhere, Dynamic Type up to the largest sizes, Reduce Motion/Transparency, contrast guard on every background, RTL correctness (leading/trailing, mirrored icons where appropriate).
-- Crash safety: no force-unwraps in new code paths, graceful TDLib errors, and a "report a problem" screen that exports a redacted diagnostics file (no messages, no numbers, no codes) only when the user chooses to share it.
-
-H3) Security and licensing review
-- Audit: secrets handling, Keychain accessibility, logging, WebView isolation, file protection for local data, backup exclusion for sensitive stores, URL scheme handling, clipboard use, pasteboard privacy.
-- Licenses: list every dependency and its license in `docs/THIRD_PARTY.md` (TDLib is Boost-licensed; the TDLibFramework package license must be stated). Confirm no GPL code or Telegram assets are in the repo.
-- Write a plain-language privacy policy (`docs/PRIVACY.md`): what stays on device, what goes to Telegram, nothing else.
-
-H4) Distribution
-- Signing and TestFlight: document the exact steps from an iPhone, the bundle ID, capabilities needed, and add the Codemagic workflow for a signed IPA / TestFlight upload using Codemagic's signing integration (no certificates or keys in the repo).
-- App Store readiness check: guideline risks for a third-party Telegram client (user-generated content moderation, report/block, age rating, privacy nutrition labels, Telegram's API terms and requirement to keep the unofficial notice). List risks honestly; do not promise approval.
-
-H5) Release
-- Version bump, changelog, `docs/KNOWN_ISSUES.md`, and a final status table across all phases.
-
-Deliverables: the docs above, UI tests running on CI, performance numbers, a final risk list. Stop after Phase H.
-```
+أنت تعمل على مستودع KroGram (تطبيق iOS بـ Swift/SwiftUI فوق TDLib عبر واجهة JSON). المطلوب إصلاح الأخطاء التالية فقط، بأقل تغيير ممكن، دون إعادة هيكلة أو تغيير سلوك غير مذكور. المسارات نسبية إلى KroGram/KroGram/.
+
+## قيود عامة
+- لا يتوفر Xcode في بيئتك، فلا تدّعِ أن البناء نجح. تحقق بالقراءة الدقيقة وتأكد أن الصياغة سليمة.
+- كل تغيير في طلبات TDLib يجب أن يطابق مخطط td_api.tl الرسمي (الحقول وأنواعها). لا تخمّن أسماء الحقول.
+- حدّث الاختبارات في KroGramTests/ عند الحاجة ليكشف الاختبار الخطأ فعلًا، ولا تحذف اختبارات موجودة.
+- اجعل أي تعبير SwiftUI معقد مقسّمًا إلى دوال/متغيرات صغيرة (سبق أن فشل بناء Codemagic بسبب "unable to type-check in reasonable time").
+
+## الإصلاحات المطلوبة
+
+1. الرسالة الصوتية والفيديو الدائري (Telegram/TelegramService.swift، دالتا sendVoiceNote وsendVideoNote)
+   - الكود يلف الملف داخل inputVoiceNote / inputVideoNote. هذان النوعان غير موجودين في المخطط.
+   - الصحيح: داخل inputMessageVoiceNote ضع "voice_note" = InputFile مباشرة (["@type": "inputFileLocal", "path": path])، مع duration وwaveform وcaption وself_destruct_type.
+   - وداخل inputMessageVideoNote ضع "video_note" = InputFile مباشرة، مع thumbnail وduration وlength وself_destruct_type.
+
+2. الملصقات (نفس الملف)
+   - loadStickers: غيّر قراءة المفتاح "sticker_sets" إلى "sets" (حقل stickerSets.sets).
+   - sendSticker: في inputMessageSticker ضع "sticker" = ["@type": "inputFileId", "id": sticker.id] مباشرة بدل الكائن inputSticker. أبقِ width وheight وemoji وthumbnail على مستوى inputMessageSticker نفسه.
+
+3. تثبيت المحادثات المؤرشفة (setPinned في نفس الملف)
+   - لا تستخدم chatListMain دائمًا. مرّر القائمة الصحيحة (chatListArchive للمحادثة المؤرشفة وchatListMain لغيرها). عدّل توقيع الدالة والمستدعين في ChatsViewModel.swift وTelegramChatRepository.swift وChatRepository.swift وMockData إن لزم.
+
+4. تراكم ملفات الرفع المرحلية (Features/Chats/ChatView.swift، storeOutgoingFile)
+   - أضف تنظيفًا للمجلد Application Support/KroGram/outgoing: احذف الملف بعد نجاح الإرسال أو فشله النهائي، واحذف عند بدء التطبيق الملفات الأقدم من يوم مثلًا.
+   - لا تحذف ملفًا ما زال TDLib يرفعه. تأكد أولًا من حدث انتهاء الرفع أو اكتفِ بالحذف الآمن عند الإقلاع.
+
+5. الفيديو الدائري من المكتبة (ChatView.swift، sendPickedVideoNote)
+   - الكود يحسب length = min(width, height) ثم يرفض ما فوق 640. بدل الرفض، قصّ الفيديو إلى مربع بحجم لا يزيد عن 640 (AVAssetExportSession أو AVMutableVideoComposition) ثم أرسله. حافظ على حد 60 ثانية و25 ميغابايت.
+
+6. حفظ المجلدات (ViewModels/ChatsViewModel.swift سطر ~323، وTelegram/TelegramChatRepository.swift سطر ~12)
+   - المجلدات وتعيينات المحادثات تُحفظ في الذاكرة فقط وloadFolders() ترجع []. احفظها محليًا (UserDefaults أو ملف JSON في Application Support) وحمّلها عند الإقلاع، واجعل TelegramChatRepository.loadFolders تقرأها.
+   - أضف اختبارًا في ChatsViewModelTests يتحقق من بقاء المجلد بعد إعادة إنشاء ChatsViewModel.
+
+7. تحذير Swift 6 (ViewModels/ChatsViewModel.swift سطر 39)
+   - PrivacyMode.shared معزولة على main actor وتُستخدم كقيمة افتراضية لمعامل في init. اجعل المعامل اختياريًا (PrivacyMode? = nil) وأنشئ القيمة داخل الدالة على MainActor.
+
+## الاستطلاعات: تحقق أولًا ولا تعدّل قبل التأكد
+- الكود الحالي يرسل inputPollOption ويضع allows_multiple_answers في جذر inputMessagePoll ويقرأه من poll مباشرة. هذا يطابق td_api.tl الحديث لكنه لا يطابق المخطط الأقدم (options كـ formattedText، والتعدد داخل pollTypeRegular).
+- حدّد إصدار TDLib الذي تجلبه حزمة Swiftgram/TDLibFramework فعليًا. ثبّت الحزمة على إصدار محدد بدل branch: main في KroGram/project.yml (وقل لي أي إصدار اخترت).
+- إن كان ذلك الإصدار يستخدم المخطط الأقدم فعدّل sendPoll وTGParse.poll وفق ذلك، وإلا فاترك الكود كما هو. في الحالتين حدّث testPollParsingPreservesVotingOptionsAndResultState ليختبر allows_multiple_answers = true أيضًا.
+
+## ترتيب العمل والتسليم
+- نفّذ بالترتيب 1، 2، 3، 7، 4، 5، 6، ثم الاستطلاعات.
+- في النهاية أعطني قائمة بالملفات المعدّلة وسطرًا لكل إصلاح، وما لم تستطع التحقق منه بدون بناء.
+- لا تلمس KroGram.zip ولا أرشيفات KroTheCommander ولا ملف Bugs.
