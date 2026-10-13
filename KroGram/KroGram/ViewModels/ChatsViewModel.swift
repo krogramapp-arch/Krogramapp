@@ -796,7 +796,7 @@ final class ChatsViewModel: ObservableObject {
         let entities = entityKind.map {
             [MessageEntity(offset: 0, length: (trimmed as NSString).length, kind: $0)]
         } ?? []
-        let message = Message(
+        let outgoingMessage = Message(
             text: trimmed,
             isOutgoing: true,
             state: .sending,
@@ -805,12 +805,12 @@ final class ChatsViewModel: ObservableObject {
             entities: entities
         )
         mutateChat(chatID) { chat in
-            chat.messages.append(message)
+            chat.messages.append(outgoingMessage)
             chat.messages = Array(chat.messages.suffix(200))
         }
         Task {
             await deliver(
-                localID: message.id,
+                localID: outgoingMessage.id,
                 text: trimmed,
                 chatID: chatID,
                 replyRemote: replyRemote,

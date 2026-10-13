@@ -280,6 +280,8 @@ enum TGParse {
             date: Date(timeIntervalSince1970: TimeInterval(int64(m["date"]))),
             isOutgoing: outgoing,
             state: state,
+            reactions: reactionDetails.all,
+            chosenReactions: reactionDetails.chosen,
             isEdited: int64(m["edit_date"]) > 0,
             isPinned: (m["is_pinned"] as? Bool) ?? false,
             remoteID: id,
@@ -287,8 +289,6 @@ enum TGParse {
             media: media(m["content"] as? JSON ?? [:]),
             isUnsupportedContent: isUnsupportedContent(m["content"] as? JSON ?? [:]),
             entities: entities(((m["content"] as? JSON)?["text"] as? JSON)?["entities"]),
-            reactions: reactionDetails.all,
-            chosenReactions: reactionDetails.chosen,
             poll: poll(m["content"] as? JSON ?? [:])
         )
     }

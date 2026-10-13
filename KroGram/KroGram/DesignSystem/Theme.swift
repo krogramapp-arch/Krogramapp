@@ -339,11 +339,11 @@ final class ThemeStore: ObservableObject {
 // MARK: - Typography
 
 enum KroTextStyle {
-    case title, headline, body, subheadline, footnote, caption
+    case title, title2, headline, body, subheadline, footnote, caption
 
     var uiStyle: UIFont.TextStyle {
         switch self {
-        case .title: return .title2
+        case .title, .title2: return .title2
         case .headline: return .headline
         case .body: return .body
         case .subheadline: return .subheadline

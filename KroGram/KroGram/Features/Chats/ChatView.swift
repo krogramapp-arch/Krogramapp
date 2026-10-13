@@ -646,7 +646,6 @@ struct ChatView: View {
                     Text("chat.voiceRecording")
                         .kro(.body)
                         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-                        .accessibilityLiveRegion(.assertive)
                 } else {
                     TextField("chat.message.placeholder", text: $text, axis: .vertical)
                         .lineLimit(1...5)
