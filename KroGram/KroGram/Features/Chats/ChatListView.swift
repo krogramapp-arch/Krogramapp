@@ -247,12 +247,19 @@ struct ChatListView: View {
                   systemImage: chat.isPinned ? "pin.slash" : "pin")
         }
         .tint(themes.current.accent)
+        hideButton(for: [chat.id])
+            .tint(.gray)
+    }
+
+    private func hideButton(for chatIDs: Set<Int64>, clearsSelection: Bool = false) -> some View {
         Button {
-            vm.update([chat.id]) { $0.isHidden = true }
+            vm.update(chatIDs) { $0.isHidden = true }
+            if clearsSelection {
+                selection.removeAll()
+            }
         } label: {
             Label("action.hide", systemImage: "eye.slash")
         }
-        .tint(.gray)
     }
 
     @ViewBuilder
@@ -309,9 +316,7 @@ struct ChatListView: View {
                 Label("action.archive", systemImage: "archivebox")
             }
             Spacer()
-            Button { vm.update(selection) { $0.isHidden = true }; selection.removeAll() } label: {
-                Label("action.hide", systemImage: "eye.slash")
-            }
+            hideButton(for: selection, clearsSelection: true)
             if vm.canDeleteChats {
                 Spacer()
                 Button(role: .destructive) { askDelete(selection) } label: {

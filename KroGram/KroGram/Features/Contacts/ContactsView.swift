@@ -61,16 +61,20 @@ struct ContactsView: View {
     @ViewBuilder
     private func contactEntry(for contact: Contact) -> some View {
         if vm.chat(contact.id) != nil {
-            NavigationLink(value: contact.id) {
-                row(contact)
-            }
-            .listRowBackground(Rectangle().fill(.ultraThinMaterial))
-            .task(id: contact.avatarFileID) { await loadAvatar(contact) }
+            contactChatLink(for: contact)
         } else {
             row(contact)
                 .listRowBackground(Rectangle().fill(.ultraThinMaterial))
                 .task(id: contact.avatarFileID) { await loadAvatar(contact) }
         }
+    }
+
+    private func contactChatLink(for contact: Contact) -> some View {
+        let chatID: Int64 = contact.id
+        let contactRow = row(contact)
+        return NavigationLink(value: chatID, label: { contactRow })
+            .listRowBackground(Rectangle().fill(.ultraThinMaterial))
+            .task(id: contact.avatarFileID) { await loadAvatar(contact) }
     }
 
     private func loadAvatar(_ contact: Contact) async {
