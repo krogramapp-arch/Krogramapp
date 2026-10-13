@@ -28,11 +28,15 @@ private struct SearchPagingRepository: ChatRepository {
 
 @MainActor
 final class ChatsViewModelTests: XCTestCase {
-    private func makeVM() async -> ChatsViewModel {
+    private func makeDefaults() -> UserDefaults {
         let name = "krochat.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defaults.removePersistentDomain(forName: name)
-        let vm = ChatsViewModel(repository: MockChatRepository(delay: .zero), defaults: defaults)
+        return defaults
+    }
+
+    private func makeVM() async -> ChatsViewModel {
+        let vm = ChatsViewModel(repository: MockChatRepository(delay: .zero), defaults: makeDefaults())
         await vm.load()
         return vm
     }
@@ -113,6 +117,15 @@ final class ChatsViewModelTests: XCTestCase {
         XCTAssertEqual(vm.draft(for: 1), "نص غير مكتمل")
         vm.setDraft("   ", for: 1)
         XCTAssertEqual(vm.draft(for: 1), "")
+    }
+
+    func testFoldersPersistAcrossViewModelRecreation() async {
+        let defaults = makeDefaults()
+        let first = ChatsViewModel(repository: MockChatRepository(delay: .zero), defaults: defaults)
+        first.addFolder(name: "الملاحظات", symbol: "note")
+        let second = ChatsViewModel(repository: MockChatRepository(delay: .zero), defaults: defaults)
+        XCTAssertTrue(second.folders.contains { $0.name == "الملاحظات" })
+        XCTAssertEqual(first.folders, second.folders)
     }
 
     func testDateFilterToday() {

@@ -39,7 +39,7 @@ protocol ChatRepository: Sendable {
     func markRead(chatID: Int64, remoteIDs: [Int64]) async
     func setChatOpen(_ chatID: Int64, _ open: Bool) async
     func sendTyping(chatID: Int64) async
-    func setPinned(chatID: Int64, pinned: Bool) async throws
+    func setPinned(chatID: Int64, pinned: Bool, archived: Bool) async throws
     func setArchived(chatID: Int64, archived: Bool) async throws
     func setMessageReaction(chatID: Int64, messageID: Int64, emoji: String?) async throws -> [String]?
     func setMessagePinned(chatID: Int64, messageID: Int64, pinned: Bool) async throws
@@ -103,7 +103,7 @@ extension ChatRepository {
     func markRead(chatID: Int64, remoteIDs: [Int64]) async {}
     func setChatOpen(_ chatID: Int64, _ open: Bool) async {}
     func sendTyping(chatID: Int64) async {}
-    func setPinned(chatID: Int64, pinned: Bool) async throws {}
+    func setPinned(chatID: Int64, pinned: Bool, archived: Bool = false) async throws {}
     func setArchived(chatID: Int64, archived: Bool) async throws {}
     func setMessageReaction(chatID: Int64, messageID: Int64, emoji: String?) async throws -> [String]? {
         throw MockRepositoryError.unsupported

@@ -778,6 +778,7 @@ struct ChatView: View {
             }
             let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
             let url = try storeOutgoingFile(data, fileExtension: ext)
+            defer { removeOutgoingFileIfSafe(url) }
             try await vm.sendPhoto(path: url.path, caption: text, to: chatID)
             text = ""
         } catch {
@@ -800,6 +801,7 @@ struct ChatView: View {
             let supportedExtensions = ["mov", "mp4", "m4v"]
             let ext = preferredExtension.flatMap { supportedExtensions.contains($0) ? $0 : nil } ?? "mov"
             let url = try storeOutgoingFile(data, fileExtension: ext)
+            defer { removeOutgoingFileIfSafe(url) }
             let asset = AVURLAsset(url: url)
             let duration = CMTimeGetSeconds(try await asset.load(.duration))
             guard duration.isFinite, duration > 0, duration <= 60 else {
@@ -810,12 +812,11 @@ struct ChatView: View {
                 throw TDError(code: -3, message: "MEDIA_READ_FAILED")
             }
             let naturalSize = try await videoTrack.load(.naturalSize)
-            let length = Int(min(abs(naturalSize.width), abs(naturalSize.height)))
-            guard length > 0 else { throw TDError(code: -3, message: "MEDIA_READ_FAILED") }
+            let side = max(1, min(640, Int(min(abs(naturalSize.width), abs(naturalSize.height)))))
             try await vm.sendVideoNote(
                 path: url.path,
                 duration: Int(duration.rounded(.up)),
-                length: length,
+                length: side,
                 to: chatID
             )
         } catch {
@@ -832,7 +833,9 @@ struct ChatView: View {
             Task {
                 do {
                     try await vm.sendVoiceNote(path: url.path, duration: recording.duration, to: chatID)
+                    removeOutgoingFileIfSafe(url)
                 } catch {
+                    removeOutgoingFileIfSafe(url)
                     vm.setMediaError(TGErrors.message(for: error))
                 }
             }
@@ -855,6 +858,7 @@ struct ChatView: View {
             }
             let data = try Data(contentsOf: source, options: .mappedIfSafe)
             let url = try storeOutgoingFile(data, fileExtension: source.pathExtension)
+            defer { removeOutgoingFileIfSafe(url) }
             if UTType(filenameExtension: source.pathExtension)?.conforms(to: .movie) == true {
                 try await vm.sendVideo(path: url.path, caption: text, to: chatID)
             } else {
@@ -866,9 +870,35 @@ struct ChatView: View {
         }
     }
 
+    private func removeOutgoingFileIfSafe(_ url: URL) {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("KroGram/outgoing", isDirectory: true)
+        let path = directory.path
+        guard url.path.hasPrefix(path) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func cleanExpiredOutgoingFiles() {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("KroGram/outgoing", isDirectory: true)
+        guard (try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)) != nil else { return }
+        let cutoff = Date().addingTimeInterval(-86_400)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return }
+        for url in files {
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if date < cutoff {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     private func storeOutgoingFile(_ data: Data, fileExtension ext: String) throws -> URL {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("KroGram/outgoing", isDirectory: true)
+        cleanExpiredOutgoingFiles()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let existing = try FileManager.default.contentsOfDirectory(
             at: directory,

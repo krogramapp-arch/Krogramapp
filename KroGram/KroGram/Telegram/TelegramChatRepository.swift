@@ -3,13 +3,20 @@ import Foundation
 /// `ChatRepository` backed by a real Telegram session (TDLib).
 struct TelegramChatRepository: ChatRepository {
     let service: TelegramService
+    private static let foldersKey = "krochat.folders.v1"
 
     var isReal: Bool { true }
     var events: AsyncStream<ChatEvent>? { service.events }
 
     func loadChats() async throws -> [Chat] { try await service.loadChats() }
     func loadMoreChats() async throws -> [Chat] { try await service.loadMoreChats() }
-    func loadFolders() async throws -> [ChatFolder] { [] }
+    func loadFolders() async throws -> [ChatFolder] {
+        guard let data = UserDefaults.standard.data(forKey: Self.foldersKey),
+              let folders = try? JSONDecoder().decode([ChatFolder].self, from: data) else {
+            return []
+        }
+        return folders
+    }
     func loadContacts() async throws -> [Contact] { try await service.loadContacts() }
     func send(text: String, chatID: Int64) async throws -> DeliveryState { .sent }
 
@@ -100,7 +107,9 @@ struct TelegramChatRepository: ChatRepository {
 
     func setChatOpen(_ chatID: Int64, _ open: Bool) async { await service.setChatOpen(chatID, open) }
     func sendTyping(chatID: Int64) async { await service.sendTyping(chatID: chatID) }
-    func setPinned(chatID: Int64, pinned: Bool) async throws { try await service.setPinned(chatID: chatID, pinned: pinned) }
+    func setPinned(chatID: Int64, pinned: Bool, archived: Bool = false) async throws {
+        try await service.setPinned(chatID: chatID, pinned: pinned, archived: archived)
+    }
     func setArchived(chatID: Int64, archived: Bool) async throws { try await service.setArchived(chatID: chatID, archived: archived) }
     func setMessageReaction(chatID: Int64, messageID: Int64, emoji: String?) async throws -> [String]? {
         try await service.setMessageReaction(chatID: chatID, messageID: messageID, emoji: emoji)

@@ -59,6 +59,7 @@ final class ChatsViewModel: ObservableObject {
 
     private static let draftsKey = "krochat.drafts.v1"
     private static let hiddenKey = "krochat.hidden.v1"
+    private static let foldersKey = "krochat.folders.v1"
     private static let maxDrafts = 100
 
     init(repository: ChatRepository, privacy: PrivacyMode? = nil, defaults: UserDefaults = .standard) {
@@ -73,6 +74,10 @@ final class ChatsViewModel: ObservableObject {
         }
         drafts = restored
         hiddenIDs = Set((defaults.array(forKey: Self.hiddenKey) as? [NSNumber] ?? []).map(\.int64Value))
+        if let data = defaults.data(forKey: Self.foldersKey),
+           let decoded = try? JSONDecoder().decode([ChatFolder].self, from: data) {
+            folders = decoded
+        }
         privacy.onChange = { [weak self] in self?.pushPrivacy() }
         startEvents()
     }
@@ -148,6 +153,7 @@ final class ChatsViewModel: ObservableObject {
             }
             chats = merged
             folders = f
+            persistFolders()
             loadState = .loaded
         } catch {
             loadState = .failed
@@ -305,6 +311,11 @@ final class ChatsViewModel: ObservableObject {
         defaults.set(hiddenIDs.map { NSNumber(value: $0) }, forKey: Self.hiddenKey)
     }
 
+    private func persistFolders() {
+        guard let encoded = try? JSONEncoder().encode(folders) else { return }
+        defaults.set(encoded, forKey: Self.foldersKey)
+    }
+
     /// Pin and archive are real Telegram actions when connected.
     private func pushRemoteFlags(before: [Chat]) {
         guard repository.isReal else { return }
@@ -312,7 +323,7 @@ final class ChatsViewModel: ObservableObject {
         for old in before {
             guard let now = chats.first(where: { $0.id == old.id }) else { continue }
             if old.isPinned != now.isPinned {
-                Task { try? await repo.setPinned(chatID: old.id, pinned: now.isPinned) }
+                Task { try? await repo.setPinned(chatID: old.id, pinned: now.isPinned, archived: now.isArchived) }
             }
             if old.isArchived != now.isArchived {
                 Task { try? await repo.setArchived(chatID: old.id, archived: now.isArchived) }
@@ -326,12 +337,14 @@ final class ChatsViewModel: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         folders.append(ChatFolder(name: String(trimmed.prefix(30)), symbol: symbol))
+        persistFolders()
     }
 
     func deleteFolder(_ id: UUID) {
         folders.removeAll { $0.id == id }
         for i in chats.indices { chats[i].folderIDs.remove(id) }
         if selectedFolderID == id { selectedFolderID = nil }
+        persistFolders()
     }
 
     func setFolder(_ folderID: UUID, contains: Bool, for chatID: Int64) {

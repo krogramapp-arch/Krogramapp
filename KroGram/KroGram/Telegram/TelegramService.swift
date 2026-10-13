@@ -414,10 +414,10 @@ actor TelegramService {
         return contacts
     }
 
-    func setPinned(chatID: Int64, pinned: Bool) async throws {
+    func setPinned(chatID: Int64, pinned: Bool, archived: Bool = false) async throws {
         _ = try await call([
             "@type": "toggleChatIsPinned",
-            "chat_list": ["@type": "chatListMain"] as JSON,
+            "chat_list": ["@type": archived ? "chatListArchive" : "chatListMain"] as JSON,
             "chat_id": chatID,
             "is_pinned": pinned
         ])
@@ -641,21 +641,16 @@ actor TelegramService {
         guard (1...60).contains(duration) else {
             throw TDError(code: -3, message: "INVALID_MEDIA_DURATION")
         }
-        guard (1...640).contains(length) else {
-            throw TDError(code: -3, message: "INVALID_VIDEO_NOTE")
-        }
+        let normalizedLength = max(1, min(640, length))
         _ = try await call([
             "@type": "sendMessage",
             "chat_id": chatID,
             "input_message_content": [
                 "@type": "inputMessageVideoNote",
-                "video_note": [
-                    "@type": "inputVideoNote",
-                    "video_note": ["@type": "inputFileLocal", "path": path] as JSON,
-                    "thumbnail": NSNull(),
-                    "duration": duration,
-                    "length": length
-                ] as JSON,
+                "video_note": ["@type": "inputFileLocal", "path": path] as JSON,
+                "thumbnail": NSNull(),
+                "duration": duration,
+                "length": normalizedLength,
                 "self_destruct_type": NSNull()
             ] as JSON
         ])
@@ -671,12 +666,9 @@ actor TelegramService {
             "chat_id": chatID,
             "input_message_content": [
                 "@type": "inputMessageVoiceNote",
-                "voice_note": [
-                    "@type": "inputVoiceNote",
-                    "voice_note": ["@type": "inputFileLocal", "path": path] as JSON,
-                    "duration": duration,
-                    "waveform": ""
-                ] as JSON,
+                "voice_note": ["@type": "inputFileLocal", "path": path] as JSON,
+                "duration": duration,
+                "waveform": "",
                 "caption": ["@type": "formattedText", "text": ""] as JSON,
                 "self_destruct_type": NSNull()
             ] as JSON
@@ -796,7 +788,7 @@ actor TelegramService {
             "@type": "getInstalledStickerSets",
             "sticker_type": ["@type": "stickerTypeRegular"] as JSON
         ])
-        let setIDs = (sets["sticker_sets"] as? [JSON] ?? [])
+        let setIDs = ((sets["sets"] as? [JSON]) ?? [])
             .map { TGParse.int64($0["id"]) }
             .filter { $0 != 0 }
             .prefix(5)
@@ -817,13 +809,10 @@ actor TelegramService {
             "chat_id": chatID,
             "input_message_content": [
                 "@type": "inputMessageSticker",
-                "sticker": [
-                    "@type": "inputSticker",
-                    "sticker": ["@type": "inputFileId", "id": sticker.id] as JSON,
-                    "thumbnail": NSNull(),
-                    "width": sticker.width,
-                    "height": sticker.height
-                ] as JSON,
+                "sticker": ["@type": "inputFileId", "id": sticker.id] as JSON,
+                "thumbnail": NSNull(),
+                "width": sticker.width,
+                "height": sticker.height,
                 "emoji": sticker.emoji
             ] as JSON
         ])

@@ -170,7 +170,7 @@ struct Chat: Identifiable, Hashable, Sendable {
     var lastDate: Date { messages.last?.date ?? .distantPast }
 }
 
-struct ChatFolder: Identifiable, Hashable, Sendable {
+struct ChatFolder: Identifiable, Hashable, Sendable, Codable {
     let id: UUID
     var name: String
     var symbol: String

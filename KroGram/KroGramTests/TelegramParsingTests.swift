@@ -228,7 +228,7 @@ final class TelegramParsingTests: XCTestCase {
                     ]
                 ],
                 "total_voter_count": 4,
-                "allows_multiple_answers": false,
+                "allows_multiple_answers": true,
                 "is_closed": false
             ]
         ])
@@ -238,7 +238,7 @@ final class TelegramParsingTests: XCTestCase {
         XCTAssertEqual(poll?.options.map(\.votePercentage), [75, 25])
         XCTAssertEqual(poll?.options.map(\.isChosen), [true, false])
         XCTAssertEqual(poll?.totalVoterCount, 4)
-        XCTAssertFalse(poll?.allowsMultipleAnswers ?? true)
+        XCTAssertTrue(poll?.allowsMultipleAnswers ?? false)
         XCTAssertFalse(poll?.isClosed ?? true)
     }
 
